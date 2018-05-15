@@ -1,0 +1,19 @@
+pub struct Data {
+    tape: Vec<i8>,
+    pc: u64,
+}
+
+impl Data {
+    pub fn read() -> i8 {
+        //
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn it_works() {
+        let mut test_data = Data { tape: vec![0; 1000],
+        assert_eq!(2 + 2, 4);
+    }
+}
