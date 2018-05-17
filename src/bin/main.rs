@@ -1,5 +1,5 @@
 extern crate bf;
-use bf::*;
+//use bf::*;
 
 fn main() -> () {
     let zero = 0u8;

@@ -12,6 +12,7 @@ pub struct BFVM {
     sourcecode: String,
     tape: Tape<i8>,
     bytecode: Tape<Command>,
+    //stack: Vec<i8>,
     //input: Vec<i8>,
     //output: Vec<i8>,
 }
@@ -31,6 +32,7 @@ enum Command {
     JumpIfNonzero(usize),
     Add(i8),
     MoveTape(isize),
+    Set(i8),
 }
 
 /*impl<T: Copy> Index<usize> for Tape<T> {
@@ -90,9 +92,9 @@ impl Tape<Command> {
         if m < 0 {
             panic!("Tape pointer outside left bound")
         };
-        if m >= self.data.len() as isize {
+        /*if m >= self.data.len() as isize {
             println!("[End of Program]")
-        };
+        };*/
         self.cursor = m as usize;
     }
 }
@@ -144,7 +146,6 @@ impl BFVM {
         let mut contents = String::new();
         f.read_to_string(&mut contents).expect("something went wrong reading the file");
 
-        //println!("With text:\n{}", contents);
         BFVM::from_code(&contents)
     }
 
@@ -255,6 +256,7 @@ impl BFVM {
             //println!("at {}", self.bytecode.get_cursor());
             let com = self.bytecode.read();
             match com {
+                Set(n) => self.tape.write(n),
                 Add(n) => self.tape.add(n),
                 MoveTape(n) => self.tape.move_cursor(n),
                 JumpIfZero(target) => {
