@@ -33,6 +33,8 @@ enum Command {
     Add(i8),
     MoveTape(isize),
     Set(i8),
+    HaltAlways,
+    HaltIfNonzero,
 }
 
 /*impl<T: Copy> Index<usize> for Tape<T> {
@@ -169,6 +171,7 @@ impl BFVM {
                 self.bytecode.push(com);
             }
         }
+        self.bytecode.push(HaltAlways);
 
         self.optim();
 
@@ -196,20 +199,19 @@ impl BFVM {
 
     fn optim(&mut self) {
         use self::Command::*;
-        use std::mem::swap;
-        //debug!
+
         println!("Optimizing");
-        //println!("{:?}", self.bytecode);
-        println!("length: {} commands", self.bytecode.len());
+        println!("{:?}", self.bytecode);
         let old_length = self.bytecode.len();
-        if old_length == 0 {
+        if self.bytecode.len() == 0 {
             println!("command list is empty, skipping optimize");
             return;
         };
+        println!("length: {} commands\n", self.bytecode.len());
 
         let mut old = Tape { data: vec![], cursor: 0 };
-        swap(&mut old, &mut self.bytecode);
 
+        std::mem::swap(&mut old, &mut self.bytecode);
         let mut count;
         let mut index = 0;
         while index < old.len() {
@@ -219,8 +221,7 @@ impl BFVM {
                     count = 1;
                     while index < old.len() - 1 && // next is within bounds
                         old.get(index + 1) == current && // same commannd
-                        count < 127
-                    // less than an i8, as Add takes an i8
+                        count < 127 // less than an i8, as Add takes an i8
                     {
                         count += 1;
                         index += 1;
@@ -232,16 +233,48 @@ impl BFVM {
                         DecP => self.bytecode.push(MoveTape(-(count as isize))),
                         _ => panic!(),
                     };
-                }
+                },
+                StartLoop => {
+                    if index < old.len() - 1 && old.get(index + 1) == EndLoop {
+                        index += 1;
+                        self.bytecode.push(HaltIfNonzero)
+                    } else {
+                        self.bytecode.push(current)
+                    }
+                },
                 _ => self.bytecode.push(current),
             };
             index += 1;
         }
 
-        println!("\nOptimized");
-        //println!("{:?}", self.bytecode);
-        println!("length after optimize: {} commands", self.bytecode.len());
+        println!("First pass");
+        println!("{:?}", self.bytecode);
+        println!("length after first pass: {} commands", self.bytecode.len());
         println!("ratio: {}%\n", (self.bytecode.len() * 100) / old_length);
+
+        /*
+        old = Tape { data: vec![], cursor: 0 };
+        std::mem::swap(&mut old, &mut self.bytecode);
+
+        let mut index = 0;
+        while index < old.len() {
+            if index < old.len() - 2 {
+                match &old.data[index..index + 2] {
+                    &[x, y, z] => println!("Woop! {}", index),
+                    _ => {},
+                }
+                self.bytecode.push(old.get(index));
+            } else {
+                self.bytecode.push(old.get(index));
+            }
+            index += 1;
+        }
+
+        println!("Second Pass");
+        println!("{:?}", self.bytecode);
+        println!("length after second pass: {} commands", self.bytecode.len());
+        println!("ratio: {}%\n", (self.bytecode.len() * 100) / old_length);
+        */
     }
 
     fn read(&self) -> i8 {
@@ -251,9 +284,13 @@ impl BFVM {
     pub fn step(&mut self) -> bool {
         // probably want to return a Result or something like it
         use self::Command::*;
+        let mut halt = true;
         if self.bytecode.get_cursor() < self.bytecode.len() {
             // don't forget iterator .next()
             //println!("at {}", self.bytecode.get_cursor());
+
+            halt = false;
+
             let com = self.bytecode.read();
             match com {
                 Set(n) => self.tape.write(n),
@@ -281,23 +318,23 @@ impl BFVM {
                         Ok(n) => if n == 1 {
                             self.tape.write(buffer[0] as i8);
                         } else {
-                            panic!("wrong numstepber of bytes read! {} bytes", n)
+                            panic!("wrong number of bytes read! {} bytes", n)
                         },
                     }
                 }
                 Output => print!("{}", self.read() as u8 as char),
+                HaltAlways => halt = true,
+                HaltIfNonzero => {
+                    if self.read() != 0 {halt = true;};
+                },
                 _ => panic!("unexpected command {:?} in compiled code", com),
             }
             //println!("{:?} executed!", com);
             self.bytecode.move_cursor(1);
             //println!("going to {}", self.bytecode.cursor);
             //println!("");
-            true
-        } else {
-            //println!("no more code");
-            //println!("");
-            false
-        }
+        };
+        !halt
     }
 }
 

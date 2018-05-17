@@ -9,7 +9,7 @@ fn main() -> () {
     //let mut main_vm = bf::BFVM::new();
     //let mut main_vm = bf::BFVM::from_file("tictactoe.bf");
     //let mut main_vm = bf::BFVM::from_code(">");
-    let mut main_vm = bf::BFVM::from_code("+++++>++<[->>+<<]");
+    let mut main_vm = bf::BFVM::from_code("[]+++++>++<[->>+<<]>>>+++[-]!++");
 
     /*let mut main_vm = bf::BFVM::from_code(
         "++++++++++[>+++++++>++++++++++>+++>+<<<<-]>++.>+.+++++++..+++.>++.<<+++++++++++++++.>.+++.------.--------.>+.>."
@@ -29,6 +29,6 @@ fn main() -> () {
     );*/
 
     //println!("{:?}\n--------\n", main_vm);
-    while main_vm.step() {}
+    while main_vm.step() {};
     println!("\n\n--------\n{:?}", main_vm);
 }
