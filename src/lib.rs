@@ -1,8 +1,8 @@
 use std::io::{self, Read};
-//use std::ops::Index;
+use std::ops::{Index, IndexMut};
 
 #[derive(Debug, Clone)]
-pub struct Tape<T: Copy> {
+struct Tape<T: Copy> {
     data: Vec<T>,
     pub cursor: usize,
 }
@@ -22,10 +22,10 @@ enum Command {
     //Nop,
     Inc,
     Dec,
-    IncP,
-    DecP,
-    Output,
-    Input,
+    IncTape,
+    DecTape,
+    OutputByte,
+    InputByte,
     StartLoop,
     EndLoop,
     JumpIfZero(usize),
@@ -33,17 +33,24 @@ enum Command {
     Add(i8),
     MoveTape(isize),
     Set(i8),
+    Seek(isize),
     HaltAlways,
     HaltIfNonzero,
 }
 
-/*impl<T: Copy> Index<usize> for Tape<T> {
-    type Output = usize;
+impl<T: Copy> Index<usize> for Tape<T> {
+    type Output = T;
 
-    fn index(&self, i: usize) -> T {
-        self.data[i]
+    fn index(&self, i: usize) -> &T {
+        &self.data[i]
     }
-}*/
+}
+
+impl<T: Copy> IndexMut<usize> for Tape<T> {
+    fn index_mut(&mut self, i: usize) -> &mut T {
+        &mut self.data[i]
+    }
+}
 
 impl<T: Copy> Tape<T> {
     fn get_cursor(&self) -> usize {
@@ -58,21 +65,12 @@ impl<T: Copy> Tape<T> {
     }
 
     fn read(&self) -> T {
-        self.get(self.cursor)
+        self[self.cursor]
     }
 
     fn write(&mut self, value: T) {
-        //self.data[self.cursor] = value;
         let index = self.cursor;
-        self.set(index, value);
-    }
-
-    fn get(&self, index: usize) -> T {
-        self.data[index]
-    }
-
-    fn set(&mut self, index: usize, value: T) {
-        self.data[index] = value;
+        self[index] = value;
     }
 
     fn len(&mut self) -> usize {
@@ -159,10 +157,10 @@ impl BFVM {
         let mut ops = HashMap::new();
         ops.insert('+', Inc);
         ops.insert('-', Dec);
-        ops.insert('>', IncP);
-        ops.insert('<', DecP);
-        ops.insert('.', Output);
-        ops.insert(',', Input);
+        ops.insert('>', IncTape);
+        ops.insert('<', DecTape);
+        ops.insert('.', OutputByte);
+        ops.insert(',', InputByte);
         ops.insert('[', StartLoop);
         ops.insert(']', EndLoop);
 
@@ -177,15 +175,15 @@ impl BFVM {
 
         let mut stack = Vec::new();
         for index in 0..self.bytecode.len() {
-            let com = self.bytecode.get(index);
+            let com = self.bytecode[index];
             match com {
                 StartLoop => {
                     stack.push(index);
                 }
                 EndLoop => {
                     let f = stack.pop().unwrap();
-                    self.bytecode.set(index, JumpIfNonzero(f));
-                    self.bytecode.set(f, JumpIfZero(index));
+                    self.bytecode[index] = JumpIfNonzero(f);
+                    self.bytecode[f] = JumpIfZero(index);
                 }
                 _ => {
                     //
@@ -201,7 +199,7 @@ impl BFVM {
         use self::Command::*;
 
         println!("Optimizing");
-        println!("{:?}", self.bytecode);
+        //println!("{:?}", self.bytecode);
         let old_length = self.bytecode.len();
         if self.bytecode.len() == 0 {
             println!("command list is empty, skipping optimize");
@@ -215,12 +213,12 @@ impl BFVM {
         let mut count;
         let mut index = 0;
         while index < old.len() {
-            let current = old.get(index);
+            let current = old[index];
             match current {
-                Inc | Dec | IncP | DecP => {
+                Inc | Dec | IncTape | DecTape => {
                     count = 1;
                     while index < old.len() - 1 && // next is within bounds
-                        old.get(index + 1) == current && // same commannd
+                        old[index + 1] == current && // same commannd
                         count < 127 // less than an i8, as Add takes an i8
                     {
                         count += 1;
@@ -229,13 +227,13 @@ impl BFVM {
                     match current {
                         Inc => self.bytecode.push(Add(count as i8)),
                         Dec => self.bytecode.push(Add(-count as i8)),
-                        IncP => self.bytecode.push(MoveTape(count as isize)),
-                        DecP => self.bytecode.push(MoveTape(-(count as isize))),
+                        IncTape => self.bytecode.push(MoveTape(count as isize)),
+                        DecTape => self.bytecode.push(MoveTape(-(count as isize))),
                         _ => panic!(),
                     };
                 },
                 StartLoop => {
-                    if index < old.len() - 1 && old.get(index + 1) == EndLoop {
+                    if index < old.len() - 1 && old[index + 1] == EndLoop {
                         index += 1;
                         self.bytecode.push(HaltIfNonzero)
                     } else {
@@ -248,37 +246,42 @@ impl BFVM {
         }
 
         println!("First pass");
-        println!("{:?}", self.bytecode);
+        //println!("{:?}", self.bytecode);
         println!("length after first pass: {} commands", self.bytecode.len());
         println!("ratio: {}%\n", (self.bytecode.len() * 100) / old_length);
 
-        /*
         old = Tape { data: vec![], cursor: 0 };
         std::mem::swap(&mut old, &mut self.bytecode);
 
         let mut index = 0;
         while index < old.len() {
             if index < old.len() - 2 {
-                match &old.data[index..index + 2] {
-                    &[x, y, z] => println!("Woop! {}", index),
-                    _ => {},
+                match &old.data[index..index + 3] {
+                &[StartLoop, middle, EndLoop] => {
+                    match middle {
+                        Add(1) | Add(-1) => {
+                            self.bytecode.push(Set(0));
+                            index += 2;
+                        },
+                        MoveTape(x) => {
+                            self.bytecode.push(Seek(x));
+                            index += 2;
+                        },
+                        _ => self.bytecode.push(old[index]),
+                    };
+                },
+                  _ => self.bytecode.push(old[index]),
                 }
-                self.bytecode.push(old.get(index));
             } else {
-                self.bytecode.push(old.get(index));
+                self.bytecode.push(old[index]);
             }
             index += 1;
         }
 
         println!("Second Pass");
-        println!("{:?}", self.bytecode);
+        //println!("{:?}", self.bytecode);
         println!("length after second pass: {} commands", self.bytecode.len());
         println!("ratio: {}%\n", (self.bytecode.len() * 100) / old_length);
-        */
-    }
-
-    fn read(&self) -> i8 {
-        self.tape.read()
     }
 
     pub fn step(&mut self) -> bool {
@@ -293,27 +296,25 @@ impl BFVM {
 
             let com = self.bytecode.read();
             match com {
-                Set(n) => self.tape.write(n),
                 Add(n) => self.tape.add(n),
+                Set(n) => self.tape.write(n),
                 MoveTape(n) => self.tape.move_cursor(n),
+                Seek(n) => while self.read() != 0 {self.tape.move_cursor(n)}, // TODO: Optimize
                 JumpIfZero(target) => {
-                    //let value = self.read();
-                    if self.read() == 0 {
+                    if self.tape.read() == 0 {
                         self.bytecode.jump(target);
                     }
                 }
                 JumpIfNonzero(target) => {
-                    //let value = self.read();
-                    if self.read() != 0 {
+                    if self.tape.read() != 0 {
                         self.bytecode.jump(target);
                     }
                 }
-                Input => {
+                InputByte => {
                     let mut buffer = [0u8; 1];
                     let mut stdin = io::stdin();
                     stdin.lock();
                     match stdin.read(&mut buffer) {
-                        //match io::stdin().read(&mut buffer) {
                         Err(e) => panic!(e),
                         Ok(n) => if n == 1 {
                             self.tape.write(buffer[0] as i8);
@@ -322,11 +323,11 @@ impl BFVM {
                         },
                     }
                 }
-                Output => print!("{}", self.read() as u8 as char),
-                HaltAlways => halt = true,
+                OutputByte => print!("{}", self.tape.read() as u8 as char),
                 HaltIfNonzero => {
-                    if self.read() != 0 {halt = true;};
+                    if self.tape.read() != 0 {halt = true;};
                 },
+                HaltAlways => halt = true,
                 _ => panic!("unexpected command {:?} in compiled code", com),
             }
             //println!("{:?} executed!", com);
@@ -336,33 +337,26 @@ impl BFVM {
         };
         !halt
     }
-}
 
-/*
-impl Command {
-    fn from_c(c: char) -> Command{
-        use self::Command::*;
-        match c {
-            '+' => Inc,
-            '-' => Dec,
-            '>' => Right,
-            '<' => Left,
-            '.' => Output,
-            ',' => Input,
-            '[' => StartLoop,
-            ']' => EndLoop,
-            _ => panic!(),
-        }
+    pub fn run(&mut self) {
+        while self.step() {};
+    }
+
+    pub fn read(&self) -> i8 {
+        self.tape.read()
     }
 }
-*/
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn it_works() {
-        let mut test_vm = super::BFVM::new();
-        assert_eq!(test_vm.read(), 0);
-        test_vm.step();
+        let mut test_vm = BFVM::new();
+        test_vm.compile("+++++[>+++<-]>");
+        while test_vm.step() {};
+        assert_eq!(test_vm.read(), 15);
     }
 }
+
