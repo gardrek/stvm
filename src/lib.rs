@@ -1,19 +1,40 @@
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::ops::{Index, IndexMut};
+
+#[derive(Debug)]
+pub enum Lang {
+    BF,
+}
+
+#[derive(Debug)]
+pub struct Program {
+    lang: Lang,
+    sourcecode: String,
+    //tokenlist, ast, etc?
+    //commandlist: Tape<Command>,
+    //bytecode: Tape<i8>,
+}
+
+#[derive(Debug)]
+enum Flag {
+    Zero,
+    Overflow,
+}
 
 #[derive(Debug, Clone)]
 struct Tape<T: Copy> {
     data: Vec<T>,
-    pub cursor: usize,
+    cursor: usize,
 }
 
 #[derive(Debug)]
-pub struct BFVM {
+pub struct STVM {
+    program: Program,
     sourcecode: String,
     tape: Tape<i8>,
     bytecode: Tape<Command>,
-    //stack: Vec<i8>,
-    //input: Vec<i8>,
+    stack: Tape<i8>,
+    //input: Vec<i8>, // should be a FIFO tho
     //output: Vec<i8>,
 }
 
@@ -36,6 +57,26 @@ enum Command {
     Seek(isize),
     HaltAlways,
     HaltIfNonzero,
+    Push(i8),
+    Pop,
+}
+
+impl Program {
+    pub fn new(lang: Lang, sourcecode: &str) -> Self {
+        Self {lang, sourcecode: sourcecode.to_string()}
+    }
+
+    pub fn from_file(filename: String) -> Self {
+        // FIXME: choose source language from file name extension
+        let lang = Lang::BF;
+
+        use std::fs::File;
+        let mut f = File::open(filename).expect("file not found");
+        let mut sourcecode = String::new();
+        f.read_to_string(&mut sourcecode).expect("something went wrong reading the file");
+
+        Self::new(lang, &sourcecode)
+    }
 }
 
 impl<T: Copy> Index<usize> for Tape<T> {
@@ -81,9 +122,11 @@ impl<T: Copy> Tape<T> {
         self.data.push(n);
     }
 
-    /*fn pop(&mut self) -> Option<T> {
+    fn pop(&mut self) -> Option<T> {
         self.data.pop()
-    }*/
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, T> { self.data.iter() }
 }
 
 impl Tape<Command> {
@@ -100,15 +143,7 @@ impl Tape<Command> {
 }
 
 impl Tape<i8> {
-    /*fn inc(&mut self) {
-        self.add(1);
-    }
-
-    fn dec(&mut self) {
-        self.add(-1);
-    }*/
-
-    fn move_cursor(&mut self, change: isize) {
+   fn move_cursor(&mut self, change: isize) {
         let m = self.cursor as isize + change;
         if m < 0 {
             panic!("Tape pointer outside left bound")
@@ -119,34 +154,51 @@ impl Tape<i8> {
         self.cursor = m as usize;
     }
 
-    fn add(&mut self, n: i8) {
+    fn add(&mut self, n: i8) -> bool {
         let m = self.data[self.cursor];
-        self.data[self.cursor] = m.wrapping_add(n)
+        let (v, overflow) = m.overflowing_add(n);
+        self.data[self.cursor] = v;
+        overflow
     }
 }
 
-impl BFVM {
-    pub fn new() -> BFVM {
-        BFVM {
+/*impl<T: Copy> Iterator for Tape<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        None
+    }
+}*/
+
+impl STVM {
+    pub fn new() -> Self {
+        Self {
+            program: Program {
+                sourcecode: String::from(""),
+                lang: Lang::BF,
+                //commandlist: Tape { data: vec![], cursor: 0 },
+                //bytecode: Tape { data: vec![], cursor: 0 },
+            },
             tape: Tape { data: vec![0], cursor: 0 },
+            stack: Tape { data: vec![0], cursor: 0 },
             sourcecode: String::from(""),
             bytecode: Tape { data: vec![], cursor: 0 },
         }
     }
 
-    pub fn from_code(code: &str) -> BFVM {
-        let mut bfvm = Self::new();
-        bfvm.compile(code);
-        bfvm
+    pub fn from_code(code: &str) -> Self {
+        let mut vm = Self::new();
+        vm.compile(code);
+        vm
     }
 
-    pub fn from_file(filename: &str) -> BFVM {
+    pub fn from_file(filename: &str) -> Self {
         use std::fs::File;
         let mut f = File::open(filename).expect("file not found");
         let mut contents = String::new();
         f.read_to_string(&mut contents).expect("something went wrong reading the file");
 
-        BFVM::from_code(&contents)
+        Self::from_code(&contents)
     }
 
     pub fn compile(&mut self, code: &str) {
@@ -173,7 +225,7 @@ impl BFVM {
 
         self.optim();
 
-        let mut stack = Vec::new();
+        let mut stack = vec![];
         for index in 0..self.bytecode.len() {
             let com = self.bytecode[index];
             match com {
@@ -181,7 +233,10 @@ impl BFVM {
                     stack.push(index);
                 }
                 EndLoop => {
-                    let f = stack.pop().unwrap();
+                    let f = match stack.pop() {
+                        None => panic!("Unmatched bracket!"),
+                        Some(x) => x,
+                    };
                     self.bytecode[index] = JumpIfNonzero(f);
                     self.bytecode[f] = JumpIfZero(index);
                 }
@@ -296,21 +351,21 @@ impl BFVM {
 
             let com = self.bytecode.read();
             match com {
-                Add(n) => self.tape.add(n),
+                Add(n) => if self.tape.add(n) {self.set_flag(Flag::Overflow)},
                 Set(n) => self.tape.write(n),
                 MoveTape(n) => self.tape.move_cursor(n),
-                Seek(n) => while self.read() != 0 {self.tape.move_cursor(n)}, // TODO: Optimize
-                JumpIfZero(target) => {
-                    if self.tape.read() == 0 {
-                        self.bytecode.jump(target);
-                    }
-                }
-                JumpIfNonzero(target) => {
-                    if self.tape.read() != 0 {
-                        self.bytecode.jump(target);
-                    }
-                }
+                Seek(n) => while self.read() != 0 { // TODO: Optimize?
+                    self.tape.move_cursor(n)
+                },
+                JumpIfZero(target) => if self.tape.read() == 0 {
+                    self.bytecode.jump(target);
+                },
+                JumpIfNonzero(target) => if self.tape.read() != 0 {
+                    self.bytecode.jump(target);
+                },
                 InputByte => {
+                    // TODO: fix it so it takes input
+                    // immediately instead of waiting for line end
                     let mut buffer = [0u8; 1];
                     let mut stdin = io::stdin();
                     stdin.lock();
@@ -322,12 +377,20 @@ impl BFVM {
                             panic!("wrong number of bytes read! {} bytes", n)
                         },
                     }
-                }
-                OutputByte => print!("{}", self.tape.read() as u8 as char),
+                },
+                OutputByte => {
+                    print!("{}", self.tape.read() as u8 as char);
+                    io::stdout().flush().unwrap();
+                },
                 HaltIfNonzero => {
                     if self.tape.read() != 0 {halt = true;};
                 },
                 HaltAlways => halt = true,
+                Push(n) => self.stack.push(n),
+                Pop => match self.stack.pop() {
+                    Some(n) => self.tape.write(n),
+                    None => panic!("attempt to pop empty stack"),
+                },
                 _ => panic!("unexpected command {:?} in compiled code", com),
             }
             //println!("{:?} executed!", com);
@@ -345,18 +408,31 @@ impl BFVM {
     pub fn read(&self) -> i8 {
         self.tape.read()
     }
+
+    pub fn get_cursor(&self) -> usize { self.tape.cursor }
+
+    pub fn each_cell(&self) -> std::slice::Iter<'_, i8> { self.tape.iter() }
+
+    pub fn debug_print(&self) -> () {
+        println!("{:?}", self.tape);
+    }
+
+    fn set_flag(&mut self, flag: Flag) -> () {
+        println!("Flag {:?} set!", flag)
+    }
+
+    fn clear_flag(&mut self, flag: Flag) -> () {
+        println!("Flag {:?} cleared!", flag)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn it_works() {
-        let mut test_vm = BFVM::new();
+        let mut test_vm = super::STVM::new();
         test_vm.compile("+++++[>+++<-]>");
         while test_vm.step() {};
         assert_eq!(test_vm.read(), 15);
     }
 }
-

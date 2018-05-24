@@ -1,5 +1,5 @@
 [package]
-name = "bf"
+name = "stvm"
 version = "0.1.0"
 authors = ["gardrek <gardrek.the.destroyer@gmail.com>"]
 
