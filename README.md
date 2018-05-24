@@ -1,1 +1,1 @@
-# rust-bfvm
+# Stack-Tape Virtual Machine
