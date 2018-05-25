@@ -1,5 +1,5 @@
 extern crate stvm;
-use stvm::STVM;
+use stvm::{STVM, Lang};
 
 fn main() -> () {
     let zero = 0u8;
@@ -8,13 +8,17 @@ fn main() -> () {
     assert_eq!(-(std::i8::MIN + 1), std::i8::MAX);
     assert_eq!(-(std::isize::MIN + 1), std::isize::MAX);
 
-    //let mut main_vm = STVM::new();
+    let mut main_vm = STVM::from_file("LostKingdomBF/LostKng.b");
     //let mut main_vm = STVM::from_file("tictactoe.bf");
     //let mut main_vm = STVM::from_file("life.bf");
     //let mut main_vm = STVM::from_file("hanoi.bf");
-    //let mut main_vm = STVM::from_code(">");
-    let mut main_vm = STVM::from_code("[]+++++>++<[->>+<<]>>>+++[-]++[<]");
-    //let mut main_vm = STVM::from_code("+++++[>+++<-]>");
+
+    let mut simpletest = STVM::from_code(Lang::BF, "[]+++++>++<[->>+<<]>>>+++[-]++[<]");
+    let mut multiply = STVM::from_code(Lang::BF, "+++++[>+++<-]>");
+
+    simpletest.run();
+    multiply.run();
+
     //println!("{}", main_vm.read());
 
     /*let mut main_vm = STVM::from_code(
@@ -37,6 +41,6 @@ fn main() -> () {
     //println!("{:?}\n--------\n", main_vm);
 
     main_vm.run();
-    main_vm.debug_print();
-    println!("\n\n--------\n{:?}", main_vm);
+    //main_vm.debug_print();
+    //println!("\n\n--------\n{:?}", main_vm);
 }
