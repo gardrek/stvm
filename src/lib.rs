@@ -2,14 +2,18 @@
  * Stack-Tape Virtual Machine
  */
 
+mod lex;
+
 use std::io::{self, Read, Write};
 use std::ops::{Index, IndexMut};
+use lex::*;
 
 /// Supported languages for compiling
 #[derive(Debug)]
 pub enum Lang {
     BF,
     LISP,
+    _LANG,
 }
 
 /// A program's source code and compiled bytecode
@@ -29,7 +33,7 @@ struct Flags {
 }
 
 #[derive(Debug)]
-struct Registerset {
+struct RegisterSet {
     flags: Flags,
 }
 
@@ -45,7 +49,7 @@ pub struct STVM {
     tape: Tape<i8>,
     bytecode: Tape<Command>,
     stack: Tape<i8>,
-    registerset: Registerset
+    registerset: RegisterSet
     //input: Vec<i8>, // should be a FIFO tho
     //output: Vec<i8>,
 }
@@ -69,11 +73,11 @@ enum Command {
     Seek(isize),
     HaltAlways,
     HaltIfNonzero,
-    Push(i8),
-    Pop,
+    //Push(i8),
+    //pPop,
 }
 
-impl Registerset {
+impl RegisterSet {
     pub fn new() -> Self {
         Self {
             flags: Flags {
@@ -105,6 +109,16 @@ impl Program {
         Self::new(lang, &sourcecode)
     }
 
+    fn compile(&mut self) {
+        match self.lang {
+            Lang::BF => self.compile_bf(),
+            Lang::LISP => self.compile_lisp(),
+            _ => unimplemented!(),
+        }
+
+    }
+
+    // BF specific stuff
     fn compile_bf(&mut self) {
         //if self.lang != Lang::BF {panic!("")};
         match self.lang {
@@ -160,21 +174,20 @@ impl Program {
     }
 
     fn optim_bf(&mut self) {
-        /*
         use self::Command::*;
 
         println!("Optimizing");
-        //println!("{:?}", self.bytecode);
-        let old_length = self.bytecode.len();
-        if self.bytecode.len() == 0 {
+        //println!("{:?}", self.commandlist);
+        let old_length = self.commandlist.len();
+        if self.commandlist.len() == 0 {
             println!("command list is empty, skipping optimize");
             return;
         };
-        println!("length: {} commands\n", self.bytecode.len());
+        println!("length: {} commands\n", self.commandlist.len());
 
         let mut old = Tape { data: vec![], cursor: 0 };
 
-        std::mem::swap(&mut old, &mut self.bytecode);
+        std::mem::swap(&mut old, &mut self.commandlist);
         let mut count:isize;
         let mut index = 0;
         while index < old.len() {
@@ -197,33 +210,33 @@ impl Program {
                         index += 1;
                     }
                     match current {
-                        Inc => self.bytecode.push(Add(count as i8)),
-                        Dec => self.bytecode.push(Add(-count as i8)),
-                        IncTape => self.bytecode.push(MoveTape(count)),
-                        DecTape => self.bytecode.push(MoveTape(-count)),
+                        Inc => self.commandlist.push(Add(count as i8)),
+                        Dec => self.commandlist.push(Add(-count as i8)),
+                        IncTape => self.commandlist.push(MoveTape(count)),
+                        DecTape => self.commandlist.push(MoveTape(-count)),
                         _ => panic!(),
                     };
                 },
                 StartLoop => {
                     if index < old.len() - 1 && old[index + 1] == EndLoop {
                         index += 1;
-                        self.bytecode.push(HaltIfNonzero)
+                        self.commandlist.push(HaltIfNonzero)
                     } else {
-                        self.bytecode.push(current)
+                        self.commandlist.push(current)
                     }
                 },
-                _ => self.bytecode.push(current),
+                _ => self.commandlist.push(current),
             };
             index += 1;
         }
 
         println!("First pass");
-        //println!("{:?}", self.bytecode);
-        println!("length after first pass: {} commands", self.bytecode.len());
-        println!("ratio: {}%\n", (self.bytecode.len() * 100) / old_length);
+        //println!("{:?}", self.commandlist);
+        println!("length after first pass: {} commands", self.commandlist.len());
+        println!("ratio: {}%\n", (self.commandlist.len() * 100) / old_length);
 
         old = Tape { data: vec![], cursor: 0 };
-        std::mem::swap(&mut old, &mut self.bytecode);
+        std::mem::swap(&mut old, &mut self.commandlist);
 
         let mut index = 0;
         while index < old.len() {
@@ -232,29 +245,153 @@ impl Program {
                 &[StartLoop, middle, EndLoop] => {
                     match middle {
                         Add(1) | Add(-1) => {
-                            self.bytecode.push(Set(0));
+                            self.commandlist.push(Set(0));
                             index += 2;
                         },
                         MoveTape(x) => {
-                            self.bytecode.push(Seek(x));
+                            self.commandlist.push(Seek(x));
                             index += 2;
                         },
-                        _ => self.bytecode.push(old[index]),
+                        _ => self.commandlist.push(old[index]),
                     };
                 },
-                  _ => self.bytecode.push(old[index]),
+                  _ => self.commandlist.push(old[index]),
                 }
             } else {
-                self.bytecode.push(old[index]);
+                self.commandlist.push(old[index]);
             }
             index += 1;
         }
 
         println!("Second Pass");
-        //println!("{:?}", self.bytecode);
-        println!("length after second pass: {} commands", self.bytecode.len());
-        println!("ratio: {}%\n", (self.bytecode.len() * 100) / old_length);
-        */
+        //println!("{:?}", self.commandlist);
+        println!("length after second pass: {} commands", self.commandlist.len());
+        println!("ratio: {}%\n", (self.commandlist.len() * 100) / old_length);
+    }
+
+    // LISP
+    fn tokenize_lisp(&mut self) -> Vec<Token> {
+        use TokenKind::*;
+
+        let mut cursor = 0;
+        let mut tokens = Vec::new();
+        let bytevec = self.sourcecode.clone().into_bytes();
+        let mut chr;
+        
+        while cursor < bytevec.len() {
+            chr = bytevec[cursor];
+            match chr {
+                 b'(' | b')' => tokens.push(Token {
+                    kind: Paren,
+                    raw: (chr as char).to_string(),
+                }),
+                b'0' ... b'9' => {
+                    let mut raw = "".to_string();
+
+                    while chr >= b'0' && chr <= b'9' {
+                        raw.push(chr as char);
+                        cursor += 1;
+                        if cursor >= bytevec.len() {break}
+                        chr = bytevec[cursor];
+                    }
+
+                    tokens.push(Token { kind: Number, raw });
+                    cursor -= 1;
+                },
+                b'a' ... b'z' => {
+                    let mut raw = "".to_string();
+
+                    while chr >= b'a' && chr <= b'z' {
+                        raw.push(chr as char);
+                        cursor += 1;
+                        if cursor >= bytevec.len() {break}
+                        chr = bytevec[cursor];
+                    }
+
+                    tokens.push(Token { kind: Name, raw });
+                },
+                b'"' => {
+                    let mut raw = "".to_string();
+
+                    cursor += 1;
+                    if cursor >= bytevec.len() {break}
+                    chr = bytevec[cursor];
+
+                    while chr != b'"' {
+                        raw.push(chr as char);
+                        cursor += 1;
+                        if cursor >= bytevec.len() {break}
+                        chr = bytevec[cursor];
+                    }
+
+                    tokens.push(Token { kind: String, raw });
+                },
+                b' ' | b'\t' | b'\n' | b'\r' => (),
+                _ => (),
+            }
+            cursor += 1;
+        }
+
+        //println!("{:?}", tokens);
+
+        for v in tokens.iter() {
+            println!("{:?}", v);
+        }
+
+        println!("\n");
+
+        tokens
+    }
+
+    fn parse_lisp(&self, tokens: Vec<Token>) -> AST {
+        use TokenKind::*;
+        use ASTNodeKind::*;
+
+        let mut ast = AST {
+            nodelist: vec![],
+        };
+
+        ast.nodelist.push(ASTNode {
+            kind: Root,
+            raw: "".to_string(),
+            params: Some(vec![]),
+        });
+
+        {
+            // this scode is to make sure ast is not borrowed from when we return
+            // idk if it is a good way to do it or not tho
+
+            let mut cursor = 0;
+
+            let mut current_node = &ast.nodelist[0];
+
+            let mut node_stack = vec![];
+
+            node_stack.push(current_node);
+
+            while cursor < tokens.len() {
+                let token = &tokens[cursor];
+                let node = match token.kind {
+                    Number => {
+                        cursor += 1;
+                        ASTNode {
+                            kind: NumberLiteral,
+                            raw: token.raw.clone(),
+                            params: None,
+                        }
+                    },
+                    _ => unimplemented!(),
+                };
+                cursor += 1;
+            };
+        };
+
+        ast
+    }
+
+    fn compile_lisp(&mut self) {
+        let tokens = self.tokenize_lisp();
+        let _ast = self.parse_lisp(tokens);
     }
 }
 
@@ -301,9 +438,9 @@ impl<T: Copy> Tape<T> {
         self.data.push(n);
     }
 
-    fn pop(&mut self) -> Option<T> {
-        self.data.pop()
-    }
+    //fn pop(&mut self) -> Option<T> {
+        //self.data.pop()
+    //}
 
     pub fn iter(&self) -> std::slice::Iter<'_, T> { self.data.iter() }
 }
@@ -361,7 +498,7 @@ impl STVM {
             tape: Tape { data: vec![0], cursor: 0 },
             stack: Tape { data: vec![0], cursor: 0 },
             bytecode: Tape { data: vec![], cursor: 0 },
-            registerset: Registerset::new(),
+            registerset: RegisterSet::new(),
         }
     }
 
@@ -384,160 +521,18 @@ impl STVM {
     }
 
     pub fn compile(&mut self) {
-        use self::Command::*;
-        use std::collections::HashMap;
-
-        let mut ops = HashMap::new();
-        ops.insert('+', Inc);
-        ops.insert('-', Dec);
-        ops.insert('>', IncTape);
-        ops.insert('<', DecTape);
-        ops.insert('.', OutputByte);
-        ops.insert(',', InputByte);
-        ops.insert('[', StartLoop);
-        ops.insert(']', EndLoop);
-
-        for c in self.program.sourcecode.chars() {
-            if let Some(&com) = ops.get(&c) {
-                self.bytecode.push(com);
-            }
-        }
-        self.bytecode.push(HaltAlways);
-
-        self.optim();
-
-        let mut stack = vec![];
-        for index in 0..self.bytecode.len() {
-            let com = self.bytecode[index];
-            match com {
-                StartLoop => {
-                    stack.push(index);
-                }
-                EndLoop => {
-                    let f = match stack.pop() {
-                        None => panic!("Unmatched bracket!"),
-                        Some(x) => x,
-                    };
-                    self.bytecode[index] = JumpIfNonzero(f);
-                    self.bytecode[f] = JumpIfZero(index);
-                }
-                _ => {
-                    //
-                }
-            };
-        }
-        if stack.len() != 0 {
-            panic!("unmatched bracket!")
-        };
-    }
-
-    fn optim(&mut self) {
-        use self::Command::*;
-
-        println!("Optimizing");
-        //println!("{:?}", self.bytecode);
-        let old_length = self.bytecode.len();
-        if self.bytecode.len() == 0 {
-            println!("command list is empty, skipping optimize");
-            return;
-        };
-        println!("length: {} commands\n", self.bytecode.len());
-
-        let mut old = Tape { data: vec![], cursor: 0 };
-
-        std::mem::swap(&mut old, &mut self.bytecode);
-        let mut count:isize;
-        let mut index = 0;
-        while index < old.len() {
-            let current = old[index];
-            match current {
-                Inc | Dec | IncTape | DecTape => {
-                    count = 1;
-                    while index < old.len() - 1 // next is within bounds
-                        && old[index + 1] == current // same commannd
-                        //count < 127 // less than i8 max, as Add takes an i8
-                        // TODO: since MoveTape takes an isize, perhaps it
-                        // would make sense to support more than ±127 for it
-                    {
-                        match current {
-                            Inc | Dec => if count >= std::i8::MAX as isize {break},
-                            IncTape | DecTape => if count >= std::isize::MAX {break},
-                            _ => panic!(),
-                        };
-                        count += 1;
-                        index += 1;
-                    }
-                    match current {
-                        Inc => self.bytecode.push(Add(count as i8)),
-                        Dec => self.bytecode.push(Add(-count as i8)),
-                        IncTape => self.bytecode.push(MoveTape(count)),
-                        DecTape => self.bytecode.push(MoveTape(-count)),
-                        _ => panic!(),
-                    };
-                },
-                StartLoop => {
-                    if index < old.len() - 1 && old[index + 1] == EndLoop {
-                        index += 1;
-                        self.bytecode.push(HaltIfNonzero)
-                    } else {
-                        self.bytecode.push(current)
-                    }
-                },
-                _ => self.bytecode.push(current),
-            };
-            index += 1;
-        }
-
-        println!("First pass");
-        //println!("{:?}", self.bytecode);
-        println!("length after first pass: {} commands", self.bytecode.len());
-        println!("ratio: {}%\n", (self.bytecode.len() * 100) / old_length);
-
-        old = Tape { data: vec![], cursor: 0 };
-        std::mem::swap(&mut old, &mut self.bytecode);
-
-        let mut index = 0;
-        while index < old.len() {
-            if index < old.len() - 2 {
-                match &old.data[index..index + 3] {
-                &[StartLoop, middle, EndLoop] => {
-                    match middle {
-                        Add(1) | Add(-1) => {
-                            self.bytecode.push(Set(0));
-                            index += 2;
-                        },
-                        MoveTape(x) => {
-                            self.bytecode.push(Seek(x));
-                            index += 2;
-                        },
-                        _ => self.bytecode.push(old[index]),
-                    };
-                },
-                  _ => self.bytecode.push(old[index]),
-                }
-            } else {
-                self.bytecode.push(old[index]);
-            }
-            index += 1;
-        }
-
-        println!("Second Pass");
-        //println!("{:?}", self.bytecode);
-        println!("length after second pass: {} commands", self.bytecode.len());
-        println!("ratio: {}%\n", (self.bytecode.len() * 100) / old_length);
+        self.program.compile()
     }
 
     pub fn step(&mut self) -> bool {
         // probably want to return a Result or something like it
         use self::Command::*;
         let mut halt = true;
-        if self.bytecode.get_cursor() < self.bytecode.len() {
+        if self.program.commandlist.get_cursor() < self.program.commandlist.len() {
             // don't forget iterator .next()
-            //println!("at {}", self.bytecode.get_cursor());
-
             halt = false;
 
-            let com = self.bytecode.read();
+            let com = self.program.commandlist.read();
             match com {
                 Add(n) => if self.tape.add(n) {self.set_overflow_flag()},
                 Set(n) => self.tape.write(n),
@@ -546,10 +541,10 @@ impl STVM {
                     self.tape.move_cursor(n)
                 },
                 JumpIfZero(target) => if self.tape.read() == 0 {
-                    self.bytecode.jump(target);
+                    self.program.commandlist.jump(target);
                 },
                 JumpIfNonzero(target) => if self.tape.read() != 0 {
-                    self.bytecode.jump(target);
+                    self.program.commandlist.jump(target);
                 },
                 InputByte => {
                     // TODO: fix it so it takes input
@@ -577,16 +572,16 @@ impl STVM {
                     if self.tape.read() != 0 {halt = true;};
                 },
                 HaltAlways => halt = true,
-                Push(n) => self.stack.push(n),
-                Pop => match self.stack.pop() {
-                    Some(n) => self.tape.write(n),
-                    None => panic!("attempt to pop empty stack"),
-                },
+                //Push(n) => self.stack.push(n),
+                //Pop => match self.stack.pop() {
+                    //Some(n) => self.tape.write(n),
+                    //None => panic!("attempt to pop empty stack"),
+                //},
                 _ => panic!("unexpected command {:?} in compiled code", com),
             }
             //println!("{:?} executed!", com);
-            self.bytecode.move_cursor(1);
-            //println!("going to {}", self.bytecode.cursor);
+            self.program.commandlist.move_cursor(1);
+            //println!("going to {}", self.program.commandlist.cursor);
             //println!("");
         };
         !halt
@@ -605,16 +600,18 @@ impl STVM {
     pub fn each_cell(&self) -> std::slice::Iter<'_, i8> { self.tape.iter() }
 
     pub fn debug_print(&self) {
-        println!("{:?}", self.tape.len());
+        let l = self.program.commandlist.len();
+        if l < 2 {return};
+        println!("{:?}", self.program.commandlist[l - 2]);
     }
 
     fn set_overflow_flag(&mut self) -> () {
         //println!("overflow flag set!")
     }
 
-    fn clear_overflow_flag(&mut self) -> () {
-        //println!("overflow flag cleared!")
-    }
+    //fn clear_overflow_flag(&mut self) -> () {
+        ////println!("overflow flag cleared!")
+    //}
 }
 
 #[cfg(test)]
