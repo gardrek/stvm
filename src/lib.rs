@@ -2,18 +2,18 @@
  * Stack-Tape Virtual Machine
  */
 
-mod lex;
+mod lisp;
 
 use std::io::{self, Read, Write};
 use std::ops::{Index, IndexMut};
-use lex::*;
+use lisp::*;
 
 /// Supported languages for compiling
 #[derive(Debug)]
 pub enum Lang {
+    Raw,
     BF,
     LISP,
-    _LANG,
 }
 
 /// A program's source code and compiled bytecode
@@ -27,14 +27,12 @@ pub struct Program {
 }
 
 #[derive(Debug)]
-struct Flags {
-    zero: bool,
-    overflow: bool,
-}
-
-#[derive(Debug)]
 struct RegisterSet {
-    flags: Flags,
+    pub acc: i16,
+    pub zero: bool,
+    pub overflow: bool,
+    pub stack_underflow: bool,
+    pub tape_outside_right_bound: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -47,9 +45,9 @@ struct Tape<T: Copy> {
 pub struct STVM {
     program: Program,
     tape: Tape<i8>,
-    bytecode: Tape<Command>,
+    //bytecode: Tape<i8>,
     stack: Tape<i8>,
-    registerset: RegisterSet
+    registers: RegisterSet
     //input: Vec<i8>, // should be a FIFO tho
     //output: Vec<i8>,
 }
@@ -57,56 +55,83 @@ pub struct STVM {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Command {
     //Nop,
-    Inc,
-    Dec,
-    IncTape,
-    DecTape,
     OutputByte,
     InputByte,
     StartLoop,
     EndLoop,
-    JumpIfZero(usize),
-    JumpIfNonzero(usize),
-    Add(i8),
-    MoveTape(isize),
+    JumpAbsoluteIfZero(usize),
+    JumpAbsoluteIfNonzero(usize),
+    JumpRelativeLongIfZero(i16),
+    JumpRelativeLongIfNonzero(i16),
+    JumpRelativeShortIfZero(i8),
+    JumpRelativeShortIfNonzero(i8),
+    Sub(i8),
+    MoveTape(i16),
     Set(i8),
-    Seek(isize),
+    // Move the tape until a non-zero cell is found
+    SeekRight,
+    SeekLeft,
     HaltAlways,
-    HaltIfNonzero,
-    //Push(i8),
-    //pPop,
+    HaltIfNotEqual(i8),
+    Push,
+    Pop,
 }
+
+/*impl Command {
+    pub fn len(&self) -> usize {
+        use Command::*;
+        match self {
+            OutputByte |
+            InputByte |
+            StartLoop |
+            EndLoop |
+            Push |
+            Pop |
+            SeekRight |
+            SeekLeft |
+            HaltAlways => 1,
+            Sub(_i8) |
+            Set(_i8) |
+            HaltIfNotEqual(_i8) => 2,
+            JumpRelativeLongIfZero(_) |
+            JumpRelativeLongIfNonzero(_) |
+            MoveTape(_)  => 3,
+        }
+    }
+}*/
 
 impl RegisterSet {
     pub fn new() -> Self {
         Self {
-            flags: Flags {
-                zero: false,
-                overflow: false,
-            },
+            acc: 0,
+            zero: false,
+            overflow: false,
+            stack_underflow: false,
+            tape_outside_right_bound: true,
         }
     }
 }
 
 impl Program {
-    pub fn new(lang: Lang, sourcecode: &str) -> Self {
-        Self {
+    pub fn new(lang: Lang, sourcecode: &str) -> Program {
+        Program {
             lang,
             sourcecode: sourcecode.to_string(),
-            commandlist: Tape { data: vec![], cursor: 0 },
+            commandlist: Tape::new(vec![]),
         }
     }
 
-    pub fn from_file(filename: &str) -> Self {
-        // FIXME: choose source language from file name extension
+    pub fn from_file(filename: &str) -> Program {
+        // TODO: choose source language from file name extension
         let lang = Lang::BF;
 
         use std::fs::File;
         let mut f = File::open(filename).expect("file not found");
         let mut sourcecode = String::new();
-        f.read_to_string(&mut sourcecode).expect("something went wrong reading the file");
+        f.read_to_string(&mut sourcecode)
+            .expect("something went wrong reading the file");
 
-        Self::new(lang, &sourcecode)
+        Program::new(lang, &sourcecode)
     }
 
     fn compile(&mut self) {
@@ -115,7 +140,11 @@ impl Program {
             Lang::LISP => self.compile_lisp(),
             _ => unimplemented!(),
         }
+    }
 
+    fn compile_lisp(&mut self) {
+        let tokens = lisp::tokenize(&self.sourcecode);
+        let _ast = lisp::parse(tokens);
     }
 
     // BF specific stuff
@@ -130,10 +159,10 @@ impl Program {
         use std::collections::HashMap;
 
         let mut ops = HashMap::new();
-        ops.insert('+', Inc);
-        ops.insert('-', Dec);
-        ops.insert('>', IncTape);
-        ops.insert('<', DecTape);
+        ops.insert('+', Sub(-1));
+        ops.insert('-', Sub(1));
+        ops.insert('>', MoveTape(1));
+        ops.insert('<', MoveTape(-1));
         ops.insert('.', OutputByte);
         ops.insert(',', InputByte);
         ops.insert('[', StartLoop);
@@ -149,6 +178,9 @@ impl Program {
         self.optim_bf();
 
         let mut stack = vec![];
+        if self.commandlist.len() > std::u32::MAX as usize {
+            panic!("length of command list exceeds 32-bit address max index")
+        }
         for index in 0..self.commandlist.len() {
             let com = self.commandlist[index];
             match com {
@@ -156,12 +188,24 @@ impl Program {
                     stack.push(index);
                 }
                 EndLoop => {
-                    let f = match stack.pop() {
+                    let start_index = match stack.pop() {
                         None => panic!("Unmatched bracket!"),
                         Some(x) => x,
                     };
-                    self.commandlist[index] = JumpIfNonzero(f);
-                    self.commandlist[f] = JumpIfZero(index);
+                    let jump_distance = index - start_index;
+                    if jump_distance <= std::i8::MAX as usize {
+                        self.commandlist[start_index] = JumpRelativeShortIfZero(jump_distance as i8);
+                        self.commandlist[index] = JumpRelativeShortIfNonzero(-(jump_distance as i8));
+                    } else if jump_distance <= std::i16::MAX as usize {
+                        self.commandlist[start_index] = JumpRelativeLongIfZero(jump_distance as i16);
+                        self.commandlist[index] = JumpRelativeLongIfNonzero(-(jump_distance as i16));
+                    } else {
+                        if index > std::u32::MAX as usize || start_index > std::u32::MAX as usize {
+                            panic!("jump target exceeds 32-bit address max index")
+                        }
+                        self.commandlist[start_index] = JumpAbsoluteIfZero(index);
+                        self.commandlist[index] = JumpAbsoluteIfNonzero(start_index);
+                    }
                 }
                 _ => {
                     //
@@ -185,42 +229,50 @@ impl Program {
         };
         println!("length: {} commands\n", self.commandlist.len());
 
-        let mut old = Tape { data: vec![], cursor: 0 };
+        let mut old = Tape::new(vec![]);
 
         std::mem::swap(&mut old, &mut self.commandlist);
-        let mut count:isize;
+        let mut count: isize;
+        let mut next_command;
         let mut index = 0;
         while index < old.len() {
             let current = old[index];
             match current {
-                Inc | Dec | IncTape | DecTape => {
-                    count = 1;
-                    while index < old.len() - 1 // next is within bounds
-                        && old[index + 1] == current // same commannd
-                        //count < 127 // less than i8 max, as Add takes an i8
-                        // TODO: since MoveTape takes an isize, perhaps it
-                        // would make sense to support more than ±127 for it
-                    {
-                        match current {
-                            Inc | Dec => if count >= std::i8::MAX as isize {break},
-                            IncTape | DecTape => if count >= std::isize::MAX {break},
-                            _ => panic!(),
-                        };
-                        count += 1;
-                        index += 1;
+                Sub(argument) => {
+                    count = argument as isize;
+                    while index + 1 < old.len() {
+                        next_command = old[index + 1];
+                        match next_command {
+                            Sub(n) => {
+                                if count.abs() >= std::i8::MAX as isize {break}
+                                count += n as isize;
+                            },
+                            _ => break,
+                        }
+                        index = index + 1;
                     }
-                    match current {
-                        Inc => self.commandlist.push(Add(count as i8)),
-                        Dec => self.commandlist.push(Add(-count as i8)),
-                        IncTape => self.commandlist.push(MoveTape(count)),
-                        DecTape => self.commandlist.push(MoveTape(-count)),
-                        _ => panic!(),
-                    };
+                    self.commandlist.push(Sub(count as i8));
+                },
+                MoveTape(argument) => {
+                    count = argument as isize;
+                    while index + 1 < old.len() {
+                        next_command = old[index + 1];
+                        match next_command {
+                            MoveTape(n) => {
+                                // NOTE: the following line limits moves to ±32767
+                                if count.abs() >= std::i16::MAX as isize {break}
+                                count += n as isize;
+                            },
+                            _ => break,
+                        }
+                        index = index + 1;
+                    }
+                    self.commandlist.push(MoveTape(count as i16));
                 },
                 StartLoop => {
                     if index < old.len() - 1 && old[index + 1] == EndLoop {
                         index += 1;
-                        self.commandlist.push(HaltIfNonzero)
+                        self.commandlist.push(HaltIfNotEqual(0))
                     } else {
                         self.commandlist.push(current)
                     }
@@ -235,26 +287,33 @@ impl Program {
         println!("length after first pass: {} commands", self.commandlist.len());
         println!("ratio: {}%\n", (self.commandlist.len() * 100) / old_length);
 
-        old = Tape { data: vec![], cursor: 0 };
+        old = Tape::new(vec![]);
         std::mem::swap(&mut old, &mut self.commandlist);
 
         let mut index = 0;
         while index < old.len() {
             if index < old.len() - 2 {
                 match &old.data[index..index + 3] {
-                &[StartLoop, middle, EndLoop] => {
-                    match middle {
-                        Add(1) | Add(-1) => {
-                            self.commandlist.push(Set(0));
-                            index += 2;
-                        },
-                        MoveTape(x) => {
-                            self.commandlist.push(Seek(x));
-                            index += 2;
-                        },
-                        _ => self.commandlist.push(old[index]),
-                    };
-                },
+                    &[StartLoop, middle, EndLoop] => {
+                        match middle {
+                            Sub(1) | Sub(-1) => {
+                                self.commandlist.push(Set(0));
+                                index += 2;
+                            },
+                            MoveTape(x) => {
+                                if x == 1 {
+                                    self.commandlist.push(SeekRight);
+                                    index += 2;
+                                } else if x == -1 {
+                                    self.commandlist.push(SeekLeft);
+                                    index += 2;
+                                } else {
+                                    self.commandlist.push(old[index]);
+                                }
+                            },
+                            _ => self.commandlist.push(old[index]),
+                        };
+                    },
                   _ => self.commandlist.push(old[index]),
                 }
             } else {
@@ -267,131 +326,6 @@ impl Program {
         //println!("{:?}", self.commandlist);
         println!("length after second pass: {} commands", self.commandlist.len());
         println!("ratio: {}%\n", (self.commandlist.len() * 100) / old_length);
-    }
-
-    // LISP
-    fn tokenize_lisp(&mut self) -> Vec<Token> {
-        use TokenKind::*;
-
-        let mut cursor = 0;
-        let mut tokens = Vec::new();
-        let bytevec = self.sourcecode.clone().into_bytes();
-        let mut chr;
-        
-        while cursor < bytevec.len() {
-            chr = bytevec[cursor];
-            match chr {
-                 b'(' | b')' => tokens.push(Token {
-                    kind: Paren,
-                    raw: (chr as char).to_string(),
-                }),
-                b'0' ... b'9' => {
-                    let mut raw = "".to_string();
-
-                    while chr >= b'0' && chr <= b'9' {
-                        raw.push(chr as char);
-                        cursor += 1;
-                        if cursor >= bytevec.len() {break}
-                        chr = bytevec[cursor];
-                    }
-
-                    tokens.push(Token { kind: Number, raw });
-                    cursor -= 1;
-                },
-                b'a' ... b'z' => {
-                    let mut raw = "".to_string();
-
-                    while chr >= b'a' && chr <= b'z' {
-                        raw.push(chr as char);
-                        cursor += 1;
-                        if cursor >= bytevec.len() {break}
-                        chr = bytevec[cursor];
-                    }
-
-                    tokens.push(Token { kind: Name, raw });
-                },
-                b'"' => {
-                    let mut raw = "".to_string();
-
-                    cursor += 1;
-                    if cursor >= bytevec.len() {break}
-                    chr = bytevec[cursor];
-
-                    while chr != b'"' {
-                        raw.push(chr as char);
-                        cursor += 1;
-                        if cursor >= bytevec.len() {break}
-                        chr = bytevec[cursor];
-                    }
-
-                    tokens.push(Token { kind: String, raw });
-                },
-                b' ' | b'\t' | b'\n' | b'\r' => (),
-                _ => (),
-            }
-            cursor += 1;
-        }
-
-        //println!("{:?}", tokens);
-
-        for v in tokens.iter() {
-            println!("{:?}", v);
-        }
-
-        println!("\n");
-
-        tokens
-    }
-
-    fn parse_lisp(&self, tokens: Vec<Token>) -> AST {
-        use TokenKind::*;
-        use ASTNodeKind::*;
-
-        let mut ast = AST {
-            nodelist: vec![],
-        };
-
-        ast.nodelist.push(ASTNode {
-            kind: Root,
-            raw: "".to_string(),
-            params: Some(vec![]),
-        });
-
-        {
-            // this scode is to make sure ast is not borrowed from when we return
-            // idk if it is a good way to do it or not tho
-
-            let mut cursor = 0;
-
-            let mut current_node = &ast.nodelist[0];
-
-            let mut node_stack = vec![];
-
-            node_stack.push(current_node);
-
-            while cursor < tokens.len() {
-                let token = &tokens[cursor];
-                let node = match token.kind {
-                    Number => {
-                        cursor += 1;
-                        ASTNode {
-                            kind: NumberLiteral,
-                            raw: token.raw.clone(),
-                            params: None,
-                        }
-                    },
-                    _ => unimplemented!(),
-                };
-                cursor += 1;
-            };
-        };
-
-        ast
-    }
-
-    fn compile_lisp(&mut self) {
-        let tokens = self.tokenize_lisp();
-        let _ast = self.parse_lisp(tokens);
     }
 }
 
@@ -410,8 +344,20 @@ impl<T: Copy> IndexMut<usize> for Tape<T> {
 }
 
 impl<T: Copy> Tape<T> {
+    fn new(data: Vec<T>) -> Tape<T> {
+        Tape {
+            data,
+            cursor: 0,
+        }
+    }
+
     fn get_cursor(&self) -> usize {
         self.cursor
+    }
+
+    fn jump_relative(&mut self, target: isize) {
+        let c = self.get_cursor() as isize;
+        self.jump((c + target) as usize);
     }
 
     fn jump(&mut self, target: usize) {
@@ -438,41 +384,53 @@ impl<T: Copy> Tape<T> {
         self.data.push(n);
     }
 
-    //fn pop(&mut self) -> Option<T> {
-        //self.data.pop()
-    //}
+    fn pop(&mut self) -> (T, bool) {
+        /*if self.len() == 0 or self.cursor < 0 {
+            // what to do if tape is empty
+        } else*/ if self.cursor == self.len() - 1 {
+            (self.read(), true)
+        } else {
+            // note that this will not panic unless cursor points to outside
+            // the tape, which should not normally happen, unless len == 0
+            (self.data.pop().unwrap(), false)
+        }
+    }
 
     pub fn iter(&self) -> std::slice::Iter<'_, T> { self.data.iter() }
 }
 
 impl Tape<Command> {
-    fn move_cursor(&mut self, change: isize) {
+    fn move_cursor(&mut self, change: isize) -> bool {
         let m = self.cursor as isize + change;
         if m < 0 {
             panic!("Tape pointer outside left bound")
         };
-        /*if m >= self.data.len() as isize {
+        let outside_right_bound = m >= self.data.len() as isize;
+        /*if outside_right_bound {
             println!("[End of Program]")
         };*/
         self.cursor = m as usize;
+        outside_right_bound
     }
 }
 
 impl Tape<i8> {
-   fn move_cursor(&mut self, change: isize) {
+   fn move_cursor(&mut self, change: isize) -> bool {
         let m = self.cursor as isize + change;
         if m < 0 {
             panic!("Tape pointer outside left bound")
         };
-        if m >= self.data.len() as isize {
+        let outside_right_bound = m >= self.data.len() as isize;
+        if outside_right_bound {
             self.data.resize((m + 1) as usize, 0i8)
         };
         self.cursor = m as usize;
+        outside_right_bound
     }
 
-    fn add(&mut self, n: i8) -> bool {
+    fn sub(&mut self, n: i8) -> bool {
         let m = self.data[self.cursor];
-        let (v, overflow) = m.overflowing_add(n);
+        let (v, overflow) = m.overflowing_add(-n);
         self.data[self.cursor] = v;
         overflow
     }
@@ -490,16 +448,49 @@ impl STVM {
     pub fn new() -> Self {
         Self {
             program: Program {
-                lang: Lang::BF,
+                lang: Lang::Raw,
                 sourcecode: String::from(""),
-                commandlist: Tape { data: vec![], cursor: 0 },
-                //bytecode: Tape { data: vec![], cursor: 0 },
+                commandlist: Tape::new(vec![]),
+                //bytecode: Tape::new(vec![]),
             },
-            tape: Tape { data: vec![0], cursor: 0 },
-            stack: Tape { data: vec![0], cursor: 0 },
-            bytecode: Tape { data: vec![], cursor: 0 },
-            registerset: RegisterSet::new(),
+            tape: Tape::new(vec![0]),
+            stack: Tape::new(vec![0]),
+            //bytecode: Tape Tape::new(vec![]),
+            registers: RegisterSet::new(),
         }
+    }
+
+    pub fn new_test() -> STVM {
+        use self::Command::*;
+        let mut vm = STVM::new();
+        vm.program.commandlist = Tape::new(vec![
+        /*
+            JumpIfNonzero(usize),
+            Sub(i8),
+            MoveTape(isize),
+            Set(i8),
+            Seek(isize),
+            HaltAlways,
+            HaltIfNotEqual(i8),
+        */
+            Set(2),
+            MoveTape(1),
+            Set(32),
+            MoveTape(1),
+            Set(20),
+            MoveTape(2),
+            Set(40),
+            Push,
+            Set(50),
+            Push,
+            Set(1),
+            JumpAbsoluteIfZero(14),
+            MoveTape(1),
+            Pop,
+            JumpAbsoluteIfNonzero(11),
+            HaltAlways,
+        ]);
+        vm
     }
 
     fn set_program(&mut self, program: Program) {
@@ -534,16 +525,31 @@ impl STVM {
 
             let com = self.program.commandlist.read();
             match com {
-                Add(n) => if self.tape.add(n) {self.set_overflow_flag()},
+                Sub(n) => self.registers.overflow = self.tape.sub(n),
                 Set(n) => self.tape.write(n),
-                MoveTape(n) => self.tape.move_cursor(n),
-                Seek(n) => while self.read() != 0 { // TODO: Optimize?
-                    self.tape.move_cursor(n)
+                MoveTape(n) => self.registers.tape_outside_right_bound = self.tape.move_cursor(n as isize),
+                SeekRight => while self.read() != 0 { // TODO: Optimize?
+                    self.tape.move_cursor(1);
                 },
-                JumpIfZero(target) => if self.tape.read() == 0 {
+                SeekLeft => while self.read() != 0 { // TODO: Optimize?
+                    self.tape.move_cursor(-1);
+                },
+                JumpRelativeShortIfZero(target) => if self.tape.read() == 0 {
+                    self.program.commandlist.jump_relative(target as isize);
+                },
+                JumpRelativeShortIfNonzero(target) => if self.tape.read() != 0 {
+                    self.program.commandlist.jump_relative(target as isize);
+                },
+                JumpRelativeLongIfZero(target) => if self.tape.read() == 0 {
+                    self.program.commandlist.jump_relative(target as isize);
+                },
+                JumpRelativeLongIfNonzero(target) => if self.tape.read() != 0 {
+                    self.program.commandlist.jump_relative(target as isize);
+                },
+                JumpAbsoluteIfZero(target) => if self.tape.read() == 0 {
                     self.program.commandlist.jump(target);
                 },
-                JumpIfNonzero(target) => if self.tape.read() != 0 {
+                JumpAbsoluteIfNonzero(target) => if self.tape.read() != 0 {
                     self.program.commandlist.jump(target);
                 },
                 InputByte => {
@@ -568,16 +574,20 @@ impl STVM {
                     print!("{}", self.tape.read() as u8 as char);
                     io::stdout().flush().unwrap();
                 },
-                HaltIfNonzero => {
-                    if self.tape.read() != 0 {halt = true;};
+                HaltIfNotEqual(n) => {
+                    if self.tape.read() != n {halt = true;};
                 },
                 HaltAlways => halt = true,
-                //Push(n) => self.stack.push(n),
-                //Pop => match self.stack.pop() {
-                    //Some(n) => self.tape.write(n),
-                    //None => panic!("attempt to pop empty stack"),
-                //},
-                _ => panic!("unexpected command {:?} in compiled code", com),
+                Push => self.stack.push(self.tape.read()),
+                Pop => {
+                    let (n, underflow) = self.stack.pop();
+                    self.registers.stack_underflow = underflow;
+                    self.tape.write(n);
+                },
+                _ => {
+                    //halt = true;
+                    panic!("unexpected command {:?} in compiled code", com);
+                },
             }
             //println!("{:?} executed!", com);
             self.program.commandlist.move_cursor(1);
@@ -588,7 +598,7 @@ impl STVM {
     }
 
     pub fn run(&mut self) {
-        while self.step() {};
+        while self.step() {}
     }
 
     pub fn read(&self) -> i8 {
@@ -600,18 +610,11 @@ impl STVM {
     pub fn each_cell(&self) -> std::slice::Iter<'_, i8> { self.tape.iter() }
 
     pub fn debug_print(&self) {
-        let l = self.program.commandlist.len();
-        if l < 2 {return};
-        println!("{:?}", self.program.commandlist[l - 2]);
+        println!("{:?}", self.tape);
+        //let l = self.program.commandlist.len();
+        //if l < 2 {return};
+        //println!("{:?}", self.program.commandlist[l - 2]);
     }
-
-    fn set_overflow_flag(&mut self) -> () {
-        //println!("overflow flag set!")
-    }
-
-    //fn clear_overflow_flag(&mut self) -> () {
-        ////println!("overflow flag cleared!")
-    //}
 }
 
 #[cfg(test)]
@@ -619,8 +622,11 @@ mod tests {
     #[test]
     fn it_works() {
         let mut test_vm = super::STVM::new();
-        test_vm.set_program(Program {lang: Lang::bf, sourecode: "+++++[>+++<-]>"});
-        while test_vm.step() {};
+        test_vm.set_program(Program {
+            lang: Lang::bf,
+            sourecode: "+++++[>+++<-]>",
+        });
+        while test_vm.step() {}
         assert_eq!(test_vm.read(), 15);
     }
 }
