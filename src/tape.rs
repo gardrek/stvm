@@ -1,9 +1,19 @@
+use std;
 use std::ops::{Index, IndexMut};
 
+use super::command;
+
+#[derive(Debug)]
+pub enum TapeError {
+    EOF,
+    OutOfBounds,
+    InvalidArgument,
+}
+
 #[derive(Debug, Clone)]
-struct Tape<T: Copy> {
-    data: Vec<T>,
-    cursor: usize,
+pub struct Tape<T: Copy> {
+    pub data: Vec<T>,
+    pub cursor: usize,
 }
 
 impl<T: Copy> Index<usize> for Tape<T> {
@@ -21,46 +31,90 @@ impl<T: Copy> IndexMut<usize> for Tape<T> {
 }
 
 impl<T: Copy> Tape<T> {
-    fn new(data: Vec<T>) -> Tape<T> {
+    pub fn new(data: Vec<T>) -> Tape<T> {
         Tape {
             data,
             cursor: 0,
         }
     }
 
-    fn get_cursor(&self) -> usize {
+    pub fn get_cursor(&self) -> usize {
         self.cursor
     }
 
-    fn jump(&mut self, target: usize) {
+    pub fn jump_relative(&mut self, target: isize) {
+        let c = self.get_cursor() as isize;
+        self.jump((c + target) as usize);
+    }
+
+    pub fn jump(&mut self, target: usize) {
         if target >= self.data.len() {
-            panic!("Tape pointer jump target is outside right bound")
+            panic!("Tape pointer jump target {} is outside right bound", target)
         };
         self.cursor = target;
     }
 
-    fn read(&self) -> T {
+    pub fn peek(&self) -> T {
         self[self.cursor]
     }
 
-    fn write(&mut self, value: T) {
+    pub fn peek_at(&self, index: usize) -> Result<T, TapeError> {
+        if index <= self.len() {
+            Ok(self[index])
+        } else {
+            Err(TapeError::OutOfBounds)
+        }
+    }
+
+    pub fn read_inc(&mut self) -> (T, bool) {
+        let n = self.peek();
+        (n, self.inc_cursor())
+    }
+
+    pub fn inc_read(&mut self) -> Result<T, TapeError> {
+        if self.inc_cursor() {
+            Ok(self[self.cursor])
+        } else {
+            Err(TapeError::EOF)
+        }
+    }
+
+    pub fn inc_cursor(&mut self) -> bool {
+        if self.cursor == self.len() { return false }
+        self.cursor += 1;
+        true
+    }
+
+    pub fn peek_relative(&mut self, offset: isize) -> T {
+        let target = self.get_cursor() as isize + offset;
+        if target < 0 || (target as usize) >= self.data.len() {
+            panic!("Tape peek relative target {} is outside bounds", target)
+        };
+        self[target as usize]
+    }
+
+    pub fn write_at(&mut self, index: usize, value: T) {
+        self[index] = value;
+    }
+
+    pub fn write(&mut self, value: T) {
         let index = self.cursor;
         self[index] = value;
     }
 
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.data.len()
     }
 
-    fn push(&mut self, n: T) {
+    pub fn push(&mut self, n: T) {
         self.data.push(n);
     }
 
-    fn pop(&mut self) -> (T, bool) {
+    pub fn pop(&mut self) -> (T, bool) {
         /*if self.len() == 0 or self.cursor < 0 {
             // what to do if tape is empty
         } else*/ if self.cursor == self.len() - 1 {
-            (self.read(), true)
+            (self.peek(), true)
         } else {
             // note that this will not panic unless cursor points to outside
             // the tape, which should not normally happen, unless len == 0
@@ -71,36 +125,148 @@ impl<T: Copy> Tape<T> {
     pub fn iter(&self) -> std::slice::Iter<'_, T> { self.data.iter() }
 }
 
-impl Tape<Command> {
-    fn move_cursor(&mut self, change: isize) {
-        let m = self.cursor as isize + change;
-        if m < 0 {
-            panic!("Tape pointer outside left bound")
-        };
-        /*if m >= self.data.len() as isize {
-            println!("[End of Program]")
-        };*/
-        self.cursor = m as usize;
-    }
-}
 
 impl Tape<i8> {
-   fn move_cursor(&mut self, change: isize) {
+   pub fn move_cursor(&mut self, change: isize) -> bool {
         let m = self.cursor as isize + change;
         if m < 0 {
             panic!("Tape pointer outside left bound")
         };
-        if m >= self.data.len() as isize {
+        let outside_right_bound = m >= self.data.len() as isize;
+        if outside_right_bound {
             self.data.resize((m + 1) as usize, 0i8)
         };
         self.cursor = m as usize;
+        outside_right_bound
     }
 
-    fn sub(&mut self, n: i8) -> bool {
+    pub fn sub(&mut self, n: i8) -> bool {
         let m = self.data[self.cursor];
         let (v, overflow) = m.overflowing_add(-n);
         self.data[self.cursor] = v;
         overflow
+    }
+
+    pub fn read_int(&mut self, bytes: usize) -> Result<u32, TapeError> {
+        if bytes == 0 {
+            Err(TapeError::InvalidArgument)
+        } else if bytes > 4 {
+            Err(TapeError::InvalidArgument)
+        } else {
+            let mut n: u32 = 0;
+            for _i in 0..bytes {
+                let (byte, success) = self.read_inc();
+                let byte = byte as u8;
+                n = (n << 8) | (byte as u32);
+                if !success {
+                    return Err(TapeError::OutOfBounds)
+                }
+            }
+            Ok(n)
+        }
+    }
+
+    pub fn peek_int_at(&self, mut index: usize, bytes: usize) -> Result<u32, TapeError> {
+        if bytes == 0 {
+            Err(TapeError::InvalidArgument)
+        } else if bytes > 4 {
+            Err(TapeError::InvalidArgument)
+        } else {
+            let mut n: u32 = 0;
+            for _i in 0..bytes {
+                let byte = self.peek_at(index)? as u8;
+                index += 1;
+                n = (n << 8) | (byte as u32);
+            }
+            Ok(n)
+        }
+    }
+
+    pub fn push_int(&mut self, bytes: usize, n: u32) {
+        if bytes == 0 {
+            return;
+        } else if bytes > 4 {
+            return;
+        } else {
+            for i in 0..bytes {
+                let shift = 8 * (bytes - i - 1);
+                self.push(((n & (0xff << shift)) >> shift) as i8);
+            }
+        }
+    }
+
+    pub fn write_int_at(&mut self, index: usize, bytes: usize, n: u32) {
+        if bytes == 0 {
+            panic!();
+        } else if bytes > 4 {
+            panic!();
+        } else {
+            for i in 0..bytes {
+                let shift = 8 * (bytes - i - 1);
+                self.write_at(index + i, ((n & (0xff << shift)) >> shift) as i8);
+            }
+        }
+    }
+}
+
+use std::fmt;
+
+impl fmt::Display for Tape<i8> {
+    // This trait requires `fmt` with this exact signature.
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+
+        fn format_command(bytecode: &Tape<i8>, index: usize) -> Option<(String, usize)> {
+            //use command::Opcode::*;
+
+            let com;
+            if let Some(com0) = command::Opcode::from_i8(bytecode.peek_at(index).expect("other error")) {
+                com = com0;
+            } else {
+                return None;
+            }
+
+            let length = com.len();
+
+            if index + length - 1 >= bytecode.len() {
+                return None;
+            }
+
+            let mut s = format!("{:08x}: ", index);
+            for i in 0..length {
+                s = format!("{} {:02x}", s, bytecode.peek_at(index + i).expect("error tho") as u8);
+            }
+
+            s = format!("{:26}", s);
+
+            if length == 1 {
+                s = format!("{} {:?}\n", s, com);
+            } else {
+                s = format!("{} {:?} {}\n", s, com, bytecode.peek_int_at(index + 1, length - 1).expect("the error again") as i32);
+            }
+
+            //s = format!("{}\n", s);
+
+            Some((s, length))
+        }
+
+        let mut full_output = String::new();
+
+        let mut index = 0;
+        while index < self.len() {
+            if let Some((s, n)) = format_command(&self, index) {
+                full_output += &s;
+                index += n;
+            } else {
+                full_output += "((Error))\n";
+                break;
+            }
+        }
+
+        // Write into the supplied output
+        // stream: `f`. Returns `fmt::Result` which indicates whether the
+        // operation succeeded or failed. Note that `write!` uses syntax which
+        // is very similar to `println!`.
+        write!(f, "{}", full_output)
     }
 }
 
@@ -111,55 +277,3 @@ impl Tape<i8> {
         None
     }
 }*/
-
-
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Command {
-    //Nop,
-    Inc,
-    Dec,
-    IncTape,
-    DecTape,
-    OutputByte,
-    InputByte,
-    StartLoop,
-    EndLoop,
-    JumpIfZero(usize),
-    JumpIfNonzero(usize),
-    Sub(i8),
-    MoveTape(isize),
-    Set(i8),
-    Seek(isize),
-    HaltAlways,
-    HaltIfNotEqual(i8),
-    Push,
-    Pop,
-}
-
-/*impl Command {
-    pub fn len(&self) -> usize {
-        use Command::*;
-        match self {
-            Inc |
-            Dec |
-            IncTape |
-            DecTape |
-            OutputByte |
-            InputByte |
-            StartLoop |
-            EndLoop |
-            Push |
-            Pop |
-            HaltAlways => 1,
-            Sub(_i8) |
-            Set(_i8) |
-            HaltIfNotEqual(_i8) => 2,
-            JumpIfZero(_) |
-            JumpIfNonzero(_) |
-            MoveTape(_) |
-            Seek(_) => 3,
-        }
-    }
-}*/
-
