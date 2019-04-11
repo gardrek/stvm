@@ -9,18 +9,21 @@ mod tape;
 use tape::Tape;
 
 mod command;
+use command::Opcode;
 
 mod lisp;
 
 use std::io::{self, Read, Write};
-use lisp::*;
+
+use std::error::Error;
+use std::fmt;
 
 /// Supported languages for compiling
 #[derive(Debug)]
 pub enum Lang {
     Raw,
-    BF,
-    LISP,
+    Bf,
+    Lisp,
 }
 
 /// A program's source code and compiled bytecode
@@ -36,7 +39,7 @@ pub struct Program {
 struct RegisterSet {
     pub acc: i16,
     pub zero: bool,
-    pub overflow: bool,
+    pub arithmetic_overflow: bool,
     pub stack_underflow: bool,
     pub tape_outside_right_bound: bool,
 }
@@ -53,21 +56,56 @@ pub struct STVM {
 }
 
 #[derive(Debug)]
-pub enum VMError {
+pub enum VmError {
     Halt,
-    IO(&'static str),
-    InvalidOperation(usize, i8),
-    UnexpectedEOF,
-    UnknownTapeError,
-    UnexpectedCommand(command::Opcode),
-    //Other,
+    Io(&'static str),
+
+    // byte op and location
+    InvalidOperation(i8, usize),
+
+    UnexpectedEof,
+    TapeError(tape::TapeError),
+    UnexpectedCommand(Opcode),
 }
 
-impl From<tape::TapeError> for VMError {
-    fn from(e: tape::TapeError) -> VMError {
+impl fmt::Display for VmError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use self::VmError::*;
+        match self {
+            Halt => write!(f, "Halt"),
+            Io(s) => write!(f, "I/O Error: {:?}", s),
+            InvalidOperation(op_byte, location) => {
+                write!(f, "Invalid Operation {} at position {}", op_byte, location)
+            }
+            UnexpectedEof => write!(f, "Unexpected EOF"),
+            TapeError(e) => write!(f, "Tape Error: {}", e),
+            UnexpectedCommand(op) => write!(f, "Unexpected Coommand: {:?}", op),
+        }
+    }
+}
+
+impl Error for VmError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        use self::VmError::*;
+        match self {
+            Halt | InvalidOperation(_, _) | UnexpectedCommand(_) | UnexpectedEof => None,
+            TapeError(e) => Some(e),
+            Io(_str) => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum VmState {
+    Continue,
+    Halt,
+}
+
+impl From<tape::TapeError> for VmError {
+    fn from(e: tape::TapeError) -> VmError {
         match e {
-            tape::TapeError::EOF => VMError::UnexpectedEOF,
-            _  => VMError::UnknownTapeError,
+            tape::TapeError::Eof => VmError::UnexpectedEof,
+            _ => VmError::TapeError(e),
         }
     }
 }
@@ -77,7 +115,7 @@ impl RegisterSet {
         Self {
             acc: 0,
             zero: false,
-            overflow: false,
+            arithmetic_overflow: false,
             stack_underflow: false,
             tape_outside_right_bound: false,
         }
@@ -107,10 +145,14 @@ impl Program {
 
     fn compile(&mut self) {
         match self.lang {
-            Lang::BF => self.compile_bf(),
-            Lang::LISP => self.compile_lisp(),
+            Lang::Bf => self.compile_bf(),
+            Lang::Lisp => self.compile_lisp(),
             _ => unimplemented!(),
         }
+    }
+
+    pub fn debug_inject_byte(&mut self, b: i8) {
+        self.bytecode.push(b);
     }
 
     fn compile_lisp(&mut self) {
@@ -122,16 +164,16 @@ impl Program {
 
     fn compile_bf(&mut self) {
         match self.lang {
-            Lang::BF => (),
+            Lang::Bf => (),
             _ => panic!("tried to compile wrong language"),
         }
 
-        println!("--------");
-        println!("Compiling bytecode from BF");
-        println!();
+        //println!("--------");
+        //println!("Compiling bytecode from BF");
+        //println!();
 
-        use command::Opcode::*;
         use std::collections::HashMap;
+        use Opcode::*;
 
         let mut ops = HashMap::new();
         ops.insert('+', Inc);
@@ -145,15 +187,21 @@ impl Program {
 
         let mut tmp = Tape::new(vec![]);
 
+        let mut size = 0;
         for c in self.sourcecode.chars() {
             if let Some(&com) = ops.get(&c) {
                 tmp.push(com);
+                size = size + 1;
             }
         }
+        //println!("souce code size : {} byte(s)", size);
 
         // This way the run loop can start with inc_read even
         // tho the index is a usize (so no negative)
+        // this is a hack
         self.bytecode.push(0);
+
+        let mut debug_test = 0;
 
         let mut loop_stack = vec![];
         let mut count: isize;
@@ -188,11 +236,13 @@ impl Program {
                         index = index + 1;
                     }
                     if count == 1 {
-                        self.bytecode.push(Inc.to_i8());
+                        self.bytecode.push(Inc.into());
+                        debug_test += 1;
                     } else if count == -1 {
-                        self.bytecode.push(Dec.to_i8());
+                        self.bytecode.push(Dec.into());
+                        debug_test += 1;
                     } else {
-                        self.bytecode.push(SubImmediate.to_i8());
+                        self.bytecode.push(SubImmediate.into());
                         self.bytecode.push(-count as i8);
                     }
                 }
@@ -222,20 +272,22 @@ impl Program {
                         index = index + 1;
                     }
                     if count == 1 {
-                        self.bytecode.push(IncTape.to_i8());
+                        self.bytecode.push(IncTape.into());
+                        debug_test += 1;
                     } else if count == -1 {
-                        self.bytecode.push(DecTape.to_i8());
+                        self.bytecode.push(DecTape.into());
+                        debug_test += 1;
                     } else if count.abs() <= 127 {
-                        self.bytecode.push(MoveTapeShort.to_i8());
+                        self.bytecode.push(MoveTapeShort.into());
                         self.bytecode.push(count as i8);
                     } else {
-                        self.bytecode.push(MoveTapeLong.to_i8());
+                        self.bytecode.push(MoveTapeLong.into());
                         self.bytecode.push_int(2, count as i16 as u32);
                     }
                 }
                 OutputByte | InputByte => self.bytecode.push(current as i8),
                 StartLoop => {
-                    self.bytecode.push(JumpAbsoluteIfZero.to_i8());
+                    self.bytecode.push(JumpAbsoluteIfZero.into());
                     for _i in 0..4 {
                         self.bytecode.push(0);
                     }
@@ -243,8 +295,10 @@ impl Program {
                 }
                 EndLoop => {
                     // TODO: line number for this error?
-                    let target = loop_stack.pop().expect("unmatched bracket while compiling BF");
-                    self.bytecode.push(JumpAbsoluteIfNonzero.to_i8());
+                    let target = loop_stack
+                        .pop()
+                        .expect("unmatched bracket while compiling BF");
+                    self.bytecode.push(JumpAbsoluteIfNonzero.into());
                     self.bytecode.push_int(4, target as u32);
                     let here = self.bytecode.len();
                     self.bytecode.write_int_at(target - 4, 4, here as u32)
@@ -254,7 +308,9 @@ impl Program {
             index += 1;
         }
 
-        self.bytecode.push(HaltAlways.to_i8());
+        self.bytecode.push(HaltAlways.into());
+
+        //println!("debug_test: {}", debug_test);
 
         /*
         let mut count = 0;
@@ -293,9 +349,11 @@ impl Program {
         //self.bytecode.push(HaltAlways);
         println!("\n");
         */
-        
-        println!("Finished");
-        println!();
+
+        //println!("compiled size : {} byte(s)", self.bytecode.len());
+
+        //println!("Finished");
+        //println!();
     }
 }
 
@@ -312,45 +370,6 @@ impl STVM {
             registers: RegisterSet::new(),
             prng: Prng::new_from_time(),
         }
-    }
-
-    pub fn new_test() -> STVM {
-        use command::Opcode::*;
-        let mut vm = STVM::new();
-        vm.program.bytecode = Tape::new(vec![
-            Nop.to_i8(),
-            Set.to_i8(), 2,
-            IncTape.to_i8(),
-            Set.to_i8(), 32,
-            SubImmediate.to_i8(), 10,
-            //SubRelativeLong.to_i8(), -128, -1,
-            IncTape.to_i8(),
-            Set.to_i8(), 20,
-            IncTape.to_i8(),
-            IncTape.to_i8(),
-            Push.to_i8(),
-            Set.to_i8(), 40,
-            Push.to_i8(),
-            Set.to_i8(), 50,
-            Push.to_i8(),
-            Set.to_i8(), 1,
-            JumpRelativeShortIfZero.to_i8(), 3,
-            IncTape.to_i8(),
-            Pop.to_i8(),
-            JumpRelativeShortIfNonzero.to_i8(), -3,
-            Set.to_i8(), 100,
-            JumpRelativeShortIfZero.to_i8(), 6,
-            IncTape.to_i8(),
-            PushRand.to_i8(),
-            Pop.to_i8(),
-            OutputByte.to_i8(),
-            DecTape.to_i8(),
-            Dec.to_i8(),
-            JumpRelativeShortIfNonzero.to_i8(), -6,
-            //JumpRelativeShortIfNonzero(-6),
-            HaltAlways.to_i8(),
-        ]);
-        vm
     }
 
     fn set_program(&mut self, program: Program) {
@@ -375,9 +394,8 @@ impl STVM {
         self.program.compile()
     }
 
-    pub fn step(&mut self) -> Result<(), VMError> {
-        // probably want to return a Result or something like it
-        use command::Opcode::*;
+    pub fn step(&mut self) -> Result<VmState, VmError> {
+        use Opcode::*;
 
         //let index = self.program.bytecode.get_cursor();
 
@@ -385,7 +403,10 @@ impl STVM {
         //let op = self.program.bytecode.peek();
 
         let op = self.program.bytecode.peek();
-        let com = command::Opcode::from_i8(op).ok_or(VMError::InvalidOperation(self.program.bytecode.get_cursor(), op))?;
+        let com = Opcode::from_i8(op).ok_or(VmError::InvalidOperation(
+            op,
+            self.program.bytecode.get_cursor(),
+        ))?;
 
         self.program.bytecode.inc_cursor();
 
@@ -396,17 +417,17 @@ impl STVM {
 
         /*
         let com;
-        if let Some(com0) = command::Opcode::from_i8(self.program.bytecode.peek()) {
+        if let Some(com0) = Opcode::from_i8(self.program.bytecode.peek()) {
             com = com0;
         } else {
-            return Err(VMError::Other);VMError::Other
+            return Err(VmError::Other);VmError::Other
         }
         // */
 
         match com {
             Nop => (),
-            Inc => self.registers.overflow = self.tape.sub(-1),
-            Dec => self.registers.overflow = self.tape.sub(1),
+            Inc => self.registers.arithmetic_overflow = self.tape.sub(-1),
+            Dec => self.registers.arithmetic_overflow = self.tape.sub(1),
             IncTape => self.registers.tape_outside_right_bound = self.tape.move_cursor(1),
             DecTape => self.registers.tape_outside_right_bound = self.tape.move_cursor(-1),
             Set => {
@@ -415,12 +436,12 @@ impl STVM {
             }
             SubImmediate => {
                 let (n, _) = self.program.bytecode.read_inc();
-                self.registers.overflow = self.tape.sub(n);
+                self.registers.arithmetic_overflow = self.tape.sub(n);
             }
             SubRelativeLong => {
                 let n = self.program.bytecode.read_int(2)?;
                 let m = self.tape.peek_relative(n as i32 as isize);
-                self.registers.overflow = self.tape.sub(m);
+                self.registers.arithmetic_overflow = self.tape.sub(m);
             }
             MoveTapeShort => {
                 let n = self.program.bytecode.read_int(1)?;
@@ -430,18 +451,23 @@ impl STVM {
                 let n = self.program.bytecode.read_int(2)?;
                 self.registers.tape_outside_right_bound = self.tape.move_cursor(n as i16 as isize)
             }
-            /*SeekRight => while self.tape.peek() != 0 {
-                // TODO: Optimize?
-                self.tape.move_cursor(1);
+            SeekRight => {
+                while self.tape.peek() != 0 {
+                    // TODO: Optimize?
+                    self.tape.move_cursor(1);
+                }
             }
-            SeekLeft => while self.tape.peek() != 0 {
-                // TODO: Optimize?
-                self.tape.move_cursor(-1);
+            SeekLeft => {
+                while self.tape.peek() != 0 {
+                    // TODO: Optimize?
+                    self.tape.move_cursor(-1);
+                }
             }
-            JumpRelativeShortIfZero(target) => if self.tape.peek() == 0 {
+            JumpRelativeShortIfZero => {
+                let target = self.program.bytecode.read_int(1)?;
                 self.program.bytecode.jump_relative(target as isize);
             }
-            JumpRelativeShortIfNonzero(target) => if self.tape.peek() != 0 {
+            /*JumpRelativeShortIfNonzero(target) => if self.tape.peek() != 0 {
                 self.program.bytecode.jump_relative(target as isize);
             }
             JumpRelativeLongIfZero(target) => if self.tape.peek() == 0 {
@@ -472,13 +498,15 @@ impl STVM {
                 stdin.lock();
                 match stdin.read(&mut buffer) {
                     Err(e) => panic!(e),
-                    Ok(n) => if n == 1 {
-                        self.tape.write(buffer[0] as i8);
-                    } else if n == 0 {
-                        return Err(VMError::IO("no bytes read from input"));
-                    } else {
-                        //return Err(&format!("wrong number of bytes read! {} bytes", n));
-                        return Err(VMError::IO("wrong number of bytes read!"));
+                    Ok(n) => {
+                        if n == 1 {
+                            self.tape.write(buffer[0] as i8);
+                        } else if n == 0 {
+                            return Err(VmError::Io("no bytes read from input"));
+                        } else {
+                            //return Err(&format!("wrong number of bytes read! {} bytes", n));
+                            return Err(VmError::Io("wrong number of bytes read!"));
+                        }
                     }
                 }
             }
@@ -487,18 +515,16 @@ impl STVM {
                 io::stdout().flush().unwrap();
             }
             //OutputDebug => {
-                //println!("{}", self.tape.peek());
-                //io::stdout().flush().unwrap();
+            //println!("{}", self.tape.peek());
+            //io::stdout().flush().unwrap();
             //}
             HaltIfNotEqual => {
                 let (n, _) = self.program.bytecode.read_inc();
                 if self.tape.peek() != n {
-                    return Err(VMError::Halt);
+                    return Ok(VmState::Halt);
                 }
             }
-            Push => {
-                self.stack.push(self.tape.peek())
-            }
+            Push => self.stack.push(self.tape.peek()),
             Pop => {
                 let (n, underflow) = self.stack.pop();
                 self.registers.stack_underflow = underflow;
@@ -511,20 +537,22 @@ impl STVM {
                 //self.stack.push((r >> 8) as i8);
                 //self.stack.push((r & 0xff) as i8);
             }
-            HaltAlways => return Err(VMError::Halt),
+            HaltAlways => return Ok(VmState::Halt),
             _ => {
-                return Err(VMError::UnexpectedCommand(com));
+                return Err(VmError::UnexpectedCommand(com));
             }
         }
-        //Err(VMError::Halt)
-        Ok(())
+        //Err(VmError::Halt)
+        Ok(VmState::Continue)
     }
 
-    pub fn run(&mut self) -> Result<(), VMError> {
+    pub fn run(&mut self) -> Result<(), VmError> {
         loop {
-            let err = self.step();
-            match err {
-                Ok(_) => continue,
+            match self.step() {
+                Ok(s) => match s {
+                    VmState::Continue => continue,
+                    VmState::Halt => return Ok(()),
+                },
                 Err(e) => return Err(e),
             }
         }
@@ -538,6 +566,20 @@ impl STVM {
         self.tape.iter()
     }
 
+    pub fn debug_new() -> STVM {
+        let mut test_vm = STVM::new();
+
+        test_vm.debug_inject_byte(0x00);
+
+        test_vm.debug_inject_byte(Opcode::Nop.into());
+
+        test_vm
+    }
+
+    pub fn debug_inject_byte(&mut self, b: i8) {
+        self.program.debug_inject_byte(b);
+    }
+
     pub fn debug_print(&self) {
         println!("{}", self.program.bytecode);
         //let l = self.program.commandlist.len();
@@ -549,12 +591,9 @@ impl STVM {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn it_works() {
-        let mut test_vm = super::STVM::from_code(
-            super::Lang::BF,
-            "+++++[>+++<-]>",
-        );
-        test_vm.run();
-        assert_eq!(test_vm.peek(), 15);
+    fn compiling_test() {
+        let mut test_vm = super::STVM::from_code(super::Lang::Bf, "+++++[>+++<-]>");
+        test_vm.run().expect("VM error");
+        assert_eq!(test_vm.tape.peek(), 15);
     }
 }

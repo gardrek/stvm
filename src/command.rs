@@ -1,6 +1,7 @@
+#[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Opcode {
-    Nop,
+    Nop = 0,
     Inc,
     Dec,
     IncTape,
@@ -24,7 +25,7 @@ pub enum Opcode {
     MoveTapeShort,
     MoveTapeLong,
 
-    // Move the tape until a non-zero cell is found
+    // Move the tape until a non-zero cell is found.
     SeekRight,
     SeekLeft,
 
@@ -34,125 +35,70 @@ pub enum Opcode {
     Push,
     Pop,
     PushRand,
+
+    // This opcode is always illegal to execute.
+    // Due to the way conversion to the binary representation is implemented, no Opcode can be
+    // listed after this one.
+    Illegal,
 }
 
 impl Opcode {
     pub fn len(&self) -> usize {
         use self::Opcode::*;
         match self {
-            Nop |
-            Inc |
-            Dec |
-            IncTape |
-            DecTape |
-            OutputByte |
-            InputByte |
-            StartLoop |
-            EndLoop |
-            SeekRight |
-            SeekLeft |
-            HaltAlways |
-            Push |
-            Pop |
-            PushRand => 1,
+            Illegal => 1,
 
-            HaltIfNotEqual |
-            JumpRelativeShortIfZero |
-            JumpRelativeShortIfNonzero |
-            SubImmediate |
-            MoveTapeShort |
-            Set => 2,
+            Nop | Inc | Dec | IncTape | DecTape | OutputByte | InputByte | StartLoop | EndLoop
+            | SeekRight | SeekLeft | HaltAlways | Push | Pop | PushRand => 1,
 
-            JumpRelativeLongIfZero |
-            JumpRelativeLongIfNonzero |
-            SubRelativeLong |
-            MoveTapeLong => 3,
+            HaltIfNotEqual
+            | JumpRelativeShortIfZero
+            | JumpRelativeShortIfNonzero
+            | SubImmediate
+            | MoveTapeShort
+            | Set => 2,
 
-            JumpAbsoluteIfZero |
-            JumpAbsoluteIfNonzero => 5,
-        }
-    }
+            JumpRelativeLongIfZero | JumpRelativeLongIfNonzero | SubRelativeLong | MoveTapeLong => {
+                3
+            }
 
-    pub fn to_i8(&self) -> i8 {
-        use self::Opcode::*;
-        match self {
-            Nop => 0,
-            Inc => 1,
-            Dec => 2,
-            IncTape => 3,
-            DecTape => 4,
-            OutputByte => 5,
-            InputByte => 6,
-            StartLoop => 7,
-            EndLoop => 8,
-
-            JumpRelativeShortIfZero => 9,
-            JumpRelativeShortIfNonzero => 10,
-            JumpRelativeLongIfZero => 11,
-            JumpRelativeLongIfNonzero => 12,
-            JumpAbsoluteIfZero => 13,
-            JumpAbsoluteIfNonzero => 14,
-
-            SubImmediate => 15,
-            SubRelativeLong => 16,
-            Set => 17,
-
-            MoveTapeShort => 18,
-            MoveTapeLong => 19,
-
-            // Move the tape until a non-zero cell is found
-            SeekRight => 20,
-            SeekLeft => 21,
-
-            HaltAlways => 22,
-            HaltIfNotEqual => 23,
-
-            Push => 24,
-            Pop => 25,
-
-            PushRand => 26,
+            JumpAbsoluteIfZero | JumpAbsoluteIfNonzero => 5,
         }
     }
 
     pub fn from_i8(n: i8) -> Option<Opcode> {
-        use self::Opcode::*;
-        match n {
-            0 => Some(Nop),
-            1 => Some(Inc),
-            2 => Some(Dec),
-            3 => Some(IncTape),
-            4 => Some(DecTape),
-            5 => Some(OutputByte),
-            6 => Some(InputByte),
-            7 => Some(StartLoop),
-            8 => Some(EndLoop),
-
-            9 => Some(JumpRelativeShortIfZero),
-            10 => Some(JumpRelativeShortIfNonzero),
-            11 => Some(JumpRelativeLongIfZero),
-            12 => Some(JumpRelativeLongIfNonzero),
-            13 => Some(JumpAbsoluteIfZero),
-            14 => Some(JumpAbsoluteIfNonzero),
-
-            15 => Some(SubImmediate),
-            16 => Some(SubRelativeLong),
-            17 => Some(Set),
-
-            18 => Some(MoveTapeShort),
-            19 => Some(MoveTapeLong),
-
-            // Move the tape until a non-zero cell is found
-            20 => Some(SeekRight),
-            21 => Some(SeekLeft),
-
-            22 => Some(HaltAlways),
-            23 => Some(HaltIfNotEqual),
-
-            24 => Some(Push),
-            25 => Some(Pop),
-            26 => Some(PushRand),
-
-            _ => None,
+        let op = Opcode::from(n);
+        match op {
+            Opcode::Illegal => None,
+            x => Some(x),
         }
+    }
+}
+
+impl From<u8> for Opcode {
+    fn from(v: u8) -> Self {
+        if v >= (Opcode::Illegal as u8) {
+            Opcode::Illegal
+        } else {
+            unsafe { std::mem::transmute::<u8, Opcode>(v) }
+        }
+    }
+}
+
+impl From<Opcode> for u8 {
+    fn from(op: Opcode) -> Self {
+        op as u8
+    }
+}
+
+impl From<i8> for Opcode {
+    fn from(v: i8) -> Self {
+        Opcode::from(v as u8)
+    }
+}
+
+impl From<Opcode> for i8 {
+    fn from(op: Opcode) -> Self {
+        u8::from(op) as i8
     }
 }

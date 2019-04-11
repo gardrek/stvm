@@ -15,10 +15,59 @@ fn wait_for_input() -> () {
     }
 }
 
-fn main() -> () {
-    let mut lang:Option<Lang> = None;
+//#[derive(Debug)]
+enum ArgError {
+    Usage,
+    FileNotFound,
+    UnknownFlag,
+    Other(&'static str),
+}
+
+use std::fmt;
+impl fmt::Display for ArgError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use ArgError::*;
+        match self {
+            Usage => write!(f, "Usage:\n    stvm <script>     Run a script\n"),
+            FileNotFound => write!(f, "File not found{}", ""),
+            UnknownFlag => write!(f, "Unkown flag{}", ""),
+            Other(s) => write!(f, "{}", s),
+        }
+    }
+}
+
+impl fmt::Debug for ArgError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
+fn main() -> Result<(), ArgError> {
+    //let mut test_vm = STVM::debug_new();
+
+/*
+
+    let mut test_vm = STVM::from_code(
+        Lang::Bf,
+        ">++++++++[-<+++++++++>]<.>>+>-[+]++>++>+++[>[->+++<<+++>]<<]>-----.>->
+        +++..+++.>-.<<+[>[+>+]>>]<--------------.>>.+++.------.--------.>+.>+."
+    );
+
+    test_vm.debug_print();
+
+    test_vm.run();
+
+    return Ok(());
+
+    unreachable!();
+
+*/
+
+    let mut lang: Option<Lang> = None;
 
     let mut positional: Vec<String> = vec![];
+
+    let mut debug_mode = false;
 
     let mut i = 0;
     for argument in env::args() {
@@ -28,8 +77,10 @@ fn main() -> () {
                 "" => {},
                 _ => match s.chars().next().unwrap() {
                     '-' => match s {
-                        "--bf" => lang = Some(Lang::BF),
-                        _ => panic!("unkown flag {}", s),
+                        "--debug" => debug_mode = true,
+                        "--bf" => lang = Some(Lang::Bf),
+                        "--lisp" => lang = Some(Lang::Lisp),
+                        _ => return Err(ArgError::UnknownFlag),
                     },
                     _ => positional.push(argument.clone()),
                 },
@@ -42,33 +93,70 @@ fn main() -> () {
         panic!("too many arguments");
     };
 
+    if let None = lang {
+        if positional.len() > 0 {
+            let file = &positional[0];
+            if file.ends_with(".bf") {
+                lang = Some(Lang::Bf);
+            }
+        }
+    };
+
+    //if positional.len() > 0 {
+        //// the first argument is a filename
+        //let file = &positional[0];
+
+        //if !std::path::Path::new(file).exists() {
+            //return Err(ArgError::FileNotFound)
+        //}
+    //}
+
     if let Some(lang) = lang {
         // A language was selected
         if positional.len() > 0 {
             // the first argument is a filename
             let file = &positional[0];
+
+            if !std::path::Path::new(file).exists() {
+                return Err(ArgError::FileNotFound)
+            }
+
             let mut main_vm = STVM::from_file(lang, file);
-            println!("Press enter to run program.");
-            wait_for_input();
+
+            if debug_mode {
+                println!("Press enter to run program.");
+                wait_for_input();
+            }
 
             let e = main_vm.run();
-            println!();
-            println!();
+            if debug_mode {
+                println!();
+                println!();
+            }
 
             match e {
                 Err(e) => match e {
-                    stvm::VMError::Halt => println!("Program halted."),
-                    _ => println!("{:?}", e),
+                    _ => eprintln!("{:?}", e),
                 }
-                _ => println!("OK"),
+                _ => if debug_mode{ println!("OK")},
+            }
+
+            if debug_mode {
+                println!("{:?}", main_vm);
             }
             //println!("{:?} {:?}", lang, file);
         //} else {
             // with no argument, assume program is on stdin?
         };
-    //} else {
+        Ok(())
+    } else {
         // with no language selected, what?
-    };
+        if positional.len() == 1 {
+            Err(ArgError::Other("Could not automatically select source language"))
+        } else {
+            Err(ArgError::Usage)
+        }
+    }
 
 /*
     let zero = 0u8;
@@ -85,29 +173,29 @@ fn main() -> () {
     println!("\n\n--------\n{:?}\n", test);
 
     /*
-    let mut simpletest = STVM::from_code(Lang::BF, "[]+++++>++<[->>+<<]>>>+++[-]++[<]++[>]");
+    let mut simpletest = STVM::from_code(Lang::Bf, "[]+++++>++<[->>+<<]>>>+++[-]++[<]++[>]");
     simpletest.debug_print();
     println!("\n\n--------\n{:?}\n", simpletest);
     simpletest.run();
     simpletest.debug_print();
     println!("\n\n--------\n{:?}\n", simpletest);;
 
-    let mut multiply = STVM::from_code(Lang::BF, "+++++[>+++<-]>");
+    let mut multiply = STVM::from_code(Lang::Bf, "+++++[>+++<-]>");
     multiply.run();
     // */
 
-    //let mut main_vm = STVM::from_file(Lang::BF, "LostKingdomBF/LostKng.b");
-    //let mut main_vm = STVM::from_file(Lang::BF, "tictactoe.bf");
-    //let mut main_vm = STVM::from_file(Lang::BF, "life.bf");
-    //let mut main_vm = STVM::from_file(Lang::BF, "hanoi.bf");
-    //let mut main_vm = STVM::from_file(Lang::BF, "oobrain.min.bf");
-    //let mut main_vm = STVM::from_file(Lang::BF, "mandelbrot.bf");
+    //let mut main_vm = STVM::from_file(Lang::Bf, "LostKingdomBF/LostKng.b");
+    //let mut main_vm = STVM::from_file(Lang::Bf, "tictactoe.bf");
+    //let mut main_vm = STVM::from_file(Lang::Bf, "life.bf");
+    //let mut main_vm = STVM::from_file(Lang::Bf, "hanoi.bf");
+    //let mut main_vm = STVM::from_file(Lang::Bf, "oobrain.min.bf");
+    //let mut main_vm = STVM::from_file(Lang::Bf, "mandelbrot.bf");
 
-    //let mut main_vm = STVM::from_code(Lang::LISP, "(add (add 2 3 ) 5) \n(add 123 456 7890)(print \"I'm a string! Say what?\")");
+    //let mut main_vm = STVM::from_code(Lang::Lisp, "(add (add 2 3 ) 5) \n(add 123 456 7890)(print \"I'm a string! Say what?\")");
 
-    //let mut main_vm = STVM::from_code(Lang::BF, "-+");
+    //let mut main_vm = STVM::from_code(Lang::Bf, "-+");
     //let mut main_vm = STVM::new_test();
-    //let mut main_vm = STVM::from_code(Lang::BF,
+    //let mut main_vm = STVM::from_code(Lang::Bf,
         //"++++++++++[>+++++++>++++++++++>+++>+<<<<-]>++.>+.+++++++..+++.>++.<<+++++++++++++++.>.+++.------.--------.>+.>."
     //);
 
@@ -116,7 +204,7 @@ fn main() -> () {
 
     /*
     let mut main_vm = STVM::from_code(
-        Lang::BF,
+        Lang::Bf,
         ">++++++++[-<+++++++++>]<.>>+>-[+]++>++>+++[>[->+++<<+++>]<<]>-----.>->
         +++..+++.>-.<<+[>[+>+]>>]<--------------.>>.+++.------.--------.>+.>+."
     );
@@ -124,7 +212,7 @@ fn main() -> () {
 
     //*
     let mut main_vm = STVM::from_code(
-        Lang::BF,
+        Lang::Bf,
         "Sphinx \
          ++++++++++[>+++>++++>+++++++++++>++++++++<<<<-]>++>++++>++>+++.<\
          .--------.+.+++++.++++++++++.<<.>>>>++[<<---------.>>-]<<<<.>>--\
@@ -137,14 +225,14 @@ fn main() -> () {
 
     /*
     let mut main_vm = STVM::from_code(
-        Lang::BF,
+        Lang::Bf,
         ">>>>--<-<<+[+[<+>--->->->-<<<]>]<<--.<++++++.<<-..<<.<+.>>.>>.<<<.+++.>>.>>-.<<<+."
     );
     // */
 
     /*
     let mut main_vm = STVM::from_code(
-        Lang::BF,
+        Lang::Bf,
         "++++"
     );
     // */
@@ -156,7 +244,7 @@ fn main() -> () {
 
     /*
     let mut main_vm = STVM::from_code(
-        Lang::BF,
+        Lang::Bf,
         ">>>++[
     <++++++++[
         <[<++>-]>>[>>]+>>+[

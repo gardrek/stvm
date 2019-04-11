@@ -5,9 +5,7 @@ pub struct Prng {
 
 impl Prng {
     pub fn new() -> Prng {
-        Prng {
-            data: 0,
-        }
+        Prng { data: 0 }
     }
 
     pub fn new_from_seed(seed: u16) -> Prng {
@@ -35,11 +33,7 @@ impl Prng {
         i = s0 << 8 | s0 >> 8;
         s0 = i ^ ((s0 & 0xff) << 1);
         let s1 = 0xff80 ^ (s0 >> 1);
-        (if s0 & 1 == 1 {
-            0x8180
-        } else {
-            0x1ff4
-        } ^ s1)
+        (if s0 & 1 == 1 { 0x8180 } else { 0x1ff4 } ^ s1)
     }
 
     /*
@@ -64,8 +58,8 @@ impl Prng {
     }
 
     //pub fn gen(&mut self) -> u16 {
-        //self.data = self.next();
-        //self.data
+    //self.data = self.next();
+    //self.data
     //}
 
     pub fn gen_i8(&mut self) -> i8 {

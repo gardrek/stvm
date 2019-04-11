@@ -1,19 +1,41 @@
-use std;
+use std::error::Error;
+use std::fmt;
 use std::ops::{Index, IndexMut};
 
 use super::command;
 
 #[derive(Debug)]
 pub enum TapeError {
-    EOF,
+    Eof,
     OutOfBounds,
     InvalidArgument,
 }
 
+impl fmt::Display for TapeError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use self::TapeError::*;
+        write!(
+            f,
+            "{}",
+            match self {
+                Eof => "EOF",
+                OutOfBounds => "Out of Bounds",
+                InvalidArgument => "Invalid Argument",
+            }
+        )
+    }
+}
+
+impl Error for TapeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        None
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Tape<T: Copy> {
-    pub data: Vec<T>,
-    pub cursor: usize,
+    data: Vec<T>,
+    cursor: usize,
 }
 
 impl<T: Copy> Index<usize> for Tape<T> {
@@ -32,10 +54,7 @@ impl<T: Copy> IndexMut<usize> for Tape<T> {
 
 impl<T: Copy> Tape<T> {
     pub fn new(data: Vec<T>) -> Tape<T> {
-        Tape {
-            data,
-            cursor: 0,
-        }
+        Tape { data, cursor: 0 }
     }
 
     pub fn get_cursor(&self) -> usize {
@@ -71,16 +90,20 @@ impl<T: Copy> Tape<T> {
         (n, self.inc_cursor())
     }
 
-    pub fn inc_read(&mut self) -> Result<T, TapeError> {
-        if self.inc_cursor() {
-            Ok(self[self.cursor])
-        } else {
-            Err(TapeError::EOF)
+    /*
+        pub fn inc_read(&mut self) -> Result<T, TapeError> {
+            if self.inc_cursor() {
+                Ok(self[self.cursor])
+            } else {
+                Err(TapeError::Eof)
+            }
         }
-    }
+    */
 
     pub fn inc_cursor(&mut self) -> bool {
-        if self.cursor == self.len() { return false }
+        if self.cursor == self.len() {
+            return false;
+        }
         self.cursor += 1;
         true
     }
@@ -113,7 +136,8 @@ impl<T: Copy> Tape<T> {
     pub fn pop(&mut self) -> (T, bool) {
         /*if self.len() == 0 or self.cursor < 0 {
             // what to do if tape is empty
-        } else*/ if self.cursor == self.len() - 1 {
+        } else*/
+        if self.cursor == self.len() - 1 {
             (self.peek(), true)
         } else {
             // note that this will not panic unless cursor points to outside
@@ -122,19 +146,30 @@ impl<T: Copy> Tape<T> {
         }
     }
 
-    pub fn iter(&self) -> std::slice::Iter<'_, T> { self.data.iter() }
+    pub fn iter(&self) -> std::slice::Iter<'_, T> {
+        self.data.iter()
+    }
 }
 
+// TODO: change this to not require Clone when Vec.resize_with() is out of nightly
+impl<T: Default + Copy> Tape<T> {
+    pub fn grow(&mut self, new_size: usize) -> () {
+        if new_size > self.data.len() {
+            self.data.resize(new_size, T::default())
+        }
+    }
+}
 
 impl Tape<i8> {
-   pub fn move_cursor(&mut self, change: isize) -> bool {
+    pub fn move_cursor(&mut self, change: isize) -> bool {
         let m = self.cursor as isize + change;
         if m < 0 {
             panic!("Tape pointer outside left bound")
         };
         let outside_right_bound = m >= self.data.len() as isize;
         if outside_right_bound {
-            self.data.resize((m + 1) as usize, 0i8)
+            //self.data.resize((m + 1) as usize, 0i8);
+            self.grow((m + 1) as usize);
         };
         self.cursor = m as usize;
         outside_right_bound
@@ -159,14 +194,14 @@ impl Tape<i8> {
                 let byte = byte as u8;
                 n = (n << 8) | (byte as u32);
                 if !success {
-                    return Err(TapeError::OutOfBounds)
+                    return Err(TapeError::OutOfBounds);
                 }
             }
             Ok(n)
         }
     }
 
-    pub fn peek_int_at(&self, mut index: usize, bytes: usize) -> Result<u32, TapeError> {
+    pub fn peek_int(&self, mut index: usize, bytes: usize) -> Result<u32, TapeError> {
         if bytes == 0 {
             Err(TapeError::InvalidArgument)
         } else if bytes > 4 {
@@ -209,21 +244,14 @@ impl Tape<i8> {
     }
 }
 
-use std::fmt;
-
 impl fmt::Display for Tape<i8> {
     // This trait requires `fmt` with this exact signature.
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-
         fn format_command(bytecode: &Tape<i8>, index: usize) -> Option<(String, usize)> {
             //use command::Opcode::*;
 
-            let com;
-            if let Some(com0) = command::Opcode::from_i8(bytecode.peek_at(index).expect("other error")) {
-                com = com0;
-            } else {
-                return None;
-            }
+            let com =
+                command::Opcode::from(bytecode.peek_at(index).expect("Unexpected end of tape"));
 
             let length = com.len();
 
@@ -233,7 +261,11 @@ impl fmt::Display for Tape<i8> {
 
             let mut s = format!("{:08x}: ", index);
             for i in 0..length {
-                s = format!("{} {:02x}", s, bytecode.peek_at(index + i).expect("error tho") as u8);
+                s = format!(
+                    "{} {:02x}",
+                    s,
+                    bytecode.peek_at(index + i).expect("Unexpected end of tape") as u8
+                );
             }
 
             s = format!("{:26}", s);
@@ -241,7 +273,14 @@ impl fmt::Display for Tape<i8> {
             if length == 1 {
                 s = format!("{} {:?}\n", s, com);
             } else {
-                s = format!("{} {:?} {}\n", s, com, bytecode.peek_int_at(index + 1, length - 1).expect("the error again") as i32);
+                s = format!(
+                    "{} {:?} {}\n",
+                    s,
+                    com,
+                    bytecode
+                        .peek_int(index + 1, length - 1)
+                        .expect("Unexpected end of tape") as i32
+                );
             }
 
             //s = format!("{}\n", s);
@@ -262,18 +301,10 @@ impl fmt::Display for Tape<i8> {
             }
         }
 
-        // Write into the supplied output
-        // stream: `f`. Returns `fmt::Result` which indicates whether the
-        // operation succeeded or failed. Note that `write!` uses syntax which
-        // is very similar to `println!`.
+        // Write into the supplied output stream: `f`.
+        // Returns `fmt::Result` which indicates whether the
+        // operation succeeded or failed. Note that `write!`
+        // uses syntax which is very similar to `println!`.
         write!(f, "{}", full_output)
     }
 }
-
-/*impl<T: Copy> Iterator for Tape<T> {
-    type Item = T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        None
-    }
-}*/

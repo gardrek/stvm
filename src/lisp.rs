@@ -39,7 +39,7 @@ impl Ast {
                 raw: "".into(),
                 children: Some(vec![]),
                 line_number: 0,
-            }]
+            }],
         }
     }
     /*pub fn add_node(&mut self, node: AstNode) -> usize {
@@ -51,7 +51,7 @@ impl Ast {
 impl fmt::Display for Ast {
     // This trait requires `fmt` with this exact signature.
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use TokenKind::*;
+        use self::TokenKind::*;
 
         fn format_node(nodelist: &Vec<AstNode>, index: usize, s: String) -> String {
             let node = &nodelist[index];
@@ -72,7 +72,7 @@ impl fmt::Display for Ast {
                         }
                         None => s,
                     },
-                )
+                ),
             }
         }
 
@@ -103,7 +103,7 @@ impl AstNode {
 }*/
 
 pub fn tokenize(source: &str) -> Vec<Token> {
-    use TokenKind::*;
+    use self::TokenKind::*;
 
     let mut cursor = 0;
     let mut tokens = Vec::new();
@@ -215,7 +215,7 @@ pub fn tokenize(source: &str) -> Vec<Token> {
 }
 
 pub fn parse(tokens: Vec<Token>) -> Ast {
-    use TokenKind::*;
+    use self::TokenKind::*;
 
     let mut ast = Ast::new();
 
@@ -226,7 +226,8 @@ pub fn parse(tokens: Vec<Token>) -> Ast {
     println!("{}", ast);
     println!();
 
-    fn add_node(nodelist: &mut Vec<AstNode>, node: AstNode, stack: &Vec<usize>) -> usize{
+    fn add_node(nodelist: &mut Vec<AstNode>, node: AstNode, stack: &Vec<usize>) -> usize {
+        use self::TokenKind::*;
         nodelist.push(node);
         let node_id = nodelist.len() - 1;
         let &prev_id = stack.last().unwrap();
@@ -255,28 +256,28 @@ pub fn parse(tokens: Vec<Token>) -> Ast {
                         children: None,
                         line_number: token.line_number,
                     },
-                    &stack
+                    &stack,
                 );
             }
             Paren => {
                 match token.raw.as_ref() {
                     "(" => {
                         let node_id = add_node(
-                            &mut ast. nodelist,
+                            &mut ast.nodelist,
                             AstNode {
                                 kind: CallExpression,
                                 raw: String::new(),
                                 children: None,
                                 line_number: token.line_number,
                             },
-                            &stack
+                            &stack,
                         );
                         stack.push(node_id);
                     }
                     ")" => match stack.pop() {
                         None => panic!(),
-                        _ => (),//current_token += 1,
-                    }
+                        _ => (), //current_token += 1,
+                    },
                     _ => panic!(),
                 }
             }
