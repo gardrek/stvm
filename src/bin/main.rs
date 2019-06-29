@@ -28,7 +28,7 @@ impl fmt::Display for ArgError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use ArgError::*;
         match self {
-            Usage => write!(f, "Usage:\n    stvm <script>     Run a script\n"),
+            Usage => write!(f, "Usage:\n    stvm <script>         Run a script (programming language will be assumed based on file extension)\n    stvm --bf <script>    Run a brainf*ck script"),
             FileNotFound => write!(f, "File not found{}", ""),
             UnknownFlag => write!(f, "Unkown flag{}", ""),
             Other(s) => write!(f, "{}", s),
@@ -97,6 +97,9 @@ fn main() -> Result<(), ArgError> {
         if positional.len() > 0 {
             let file = &positional[0];
             if file.ends_with(".bf") {
+                lang = Some(Lang::Bf);
+            }
+            if file.ends_with(".b") {
                 lang = Some(Lang::Bf);
             }
         }
