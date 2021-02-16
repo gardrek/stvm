@@ -201,8 +201,6 @@ impl Program {
         // this is a hack
         self.bytecode.push(0);
 
-        let mut debug_test = 0;
-
         let mut loop_stack = vec![];
         let mut count: isize;
         let mut next_command;
@@ -237,10 +235,8 @@ impl Program {
                     }
                     if count == 1 {
                         self.bytecode.push(Inc.into());
-                        debug_test += 1;
                     } else if count == -1 {
                         self.bytecode.push(Dec.into());
-                        debug_test += 1;
                     } else {
                         self.bytecode.push(SubImmediate.into());
                         self.bytecode.push(-count as i8);
@@ -273,10 +269,8 @@ impl Program {
                     }
                     if count == 1 {
                         self.bytecode.push(IncTape.into());
-                        debug_test += 1;
                     } else if count == -1 {
                         self.bytecode.push(DecTape.into());
-                        debug_test += 1;
                     } else if count.abs() <= 127 {
                         self.bytecode.push(MoveTapeShort.into());
                         self.bytecode.push(count as i8);
@@ -309,8 +303,6 @@ impl Program {
         }
 
         self.bytecode.push(HaltAlways.into());
-
-        //println!("debug_test: {}", debug_test);
 
         /*
         let mut count = 0;

@@ -120,7 +120,7 @@ pub fn tokenize(source: &str) -> Vec<Token> {
                 raw: (chr as char).to_string(),
                 line_number,
             }),
-            b'0'...b'9' => {
+            b'0'..=b'9' => {
                 let mut raw = "".to_string();
 
                 while chr >= b'0' && chr <= b'9' {
@@ -139,7 +139,7 @@ pub fn tokenize(source: &str) -> Vec<Token> {
                 });
                 cursor -= 1;
             }
-            b'a'...b'z' => {
+            b'a'..=b'z' => {
                 let mut raw = "".to_string();
 
                 while chr >= b'a' && chr <= b'z' {

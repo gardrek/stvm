@@ -37,8 +37,8 @@ pub enum Opcode {
     PushRand,
 
     // This opcode is always illegal to execute.
-    // Due to the way conversion to the binary representation is implemented, no Opcode can be
-    // listed after this one.
+    // UNSAFE: Due to the way conversion to the binary representation is implemented, no Opcode can be
+    // listed after this one, nor otherwise be assigned a higher integer
     Illegal,
 }
 
@@ -77,6 +77,8 @@ impl Opcode {
 
 impl From<u8> for Opcode {
     fn from(v: u8) -> Self {
+        // UNSAFE: As long as no opcode is listed after Opcode::Illegal or assigned a higher
+        // integer, I believe this is safe
         if v >= (Opcode::Illegal as u8) {
             Opcode::Illegal
         } else {
