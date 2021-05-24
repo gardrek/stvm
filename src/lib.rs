@@ -32,7 +32,7 @@ pub struct Program {
     lang: Lang,
     sourcecode: String,
     //tokenlist, ast, etc?
-    bytecode: Tape<i8>,
+    bytecode: Tape<u8>,
 }
 
 #[derive(Debug)]
@@ -47,8 +47,8 @@ struct RegisterSet {
 #[derive(Debug)]
 pub struct STVM {
     program: Program,
-    tape: Tape<i8>,
-    stack: Tape<i8>,
+    tape: Tape<u8>,
+    stack: Tape<u8>,
     registers: RegisterSet,
     //input: Vec<i8>, // should be a FIFO tho
     //output: Vec<i8>,
@@ -61,7 +61,7 @@ pub enum VmError {
     Io(&'static str),
 
     // byte op and location
-    InvalidOperation(i8, usize),
+    InvalidOperation(u8, usize),
 
     UnexpectedEof,
     TapeError(tape::TapeError),
@@ -151,7 +151,7 @@ impl Program {
         }
     }
 
-    pub fn debug_inject_byte(&mut self, b: i8) {
+    pub fn debug_inject_byte(&mut self, b: u8) {
         self.bytecode.push(b);
     }
 
@@ -239,7 +239,7 @@ impl Program {
                         self.bytecode.push(Dec.into());
                     } else {
                         self.bytecode.push(SubImmediate.into());
-                        self.bytecode.push(-count as i8);
+                        self.bytecode.push(-count as i8 as u8);
                     }
                 }
                 IncTape | DecTape => {
@@ -273,13 +273,13 @@ impl Program {
                         self.bytecode.push(DecTape.into());
                     } else if count.abs() <= 127 {
                         self.bytecode.push(MoveTapeShort.into());
-                        self.bytecode.push(count as i8);
+                        self.bytecode.push(count as i8 as u8);
                     } else {
                         self.bytecode.push(MoveTapeLong.into());
                         self.bytecode.push_int(2, count as i16 as u32);
                     }
                 }
-                OutputByte | InputByte => self.bytecode.push(current as i8),
+                OutputByte | InputByte => self.bytecode.push(current as i8 as u8),
                 StartLoop => {
                     self.bytecode.push(JumpAbsoluteIfZero.into());
                     for _i in 0..4 {
@@ -395,7 +395,7 @@ impl STVM {
         //let op = self.program.bytecode.peek();
 
         let op = self.program.bytecode.peek();
-        let com = Opcode::from_i8(op).ok_or(VmError::InvalidOperation(
+        let com = Opcode::from_u8(op).ok_or(VmError::InvalidOperation(
             op,
             self.program.bytecode.get_cursor(),
         ))?;
@@ -428,12 +428,12 @@ impl STVM {
             }
             SubImmediate => {
                 let (n, _) = self.program.bytecode.read_inc();
-                self.registers.arithmetic_overflow = self.tape.i8_subtract(n);
+                self.registers.arithmetic_overflow = self.tape.i8_subtract(n as i8);
             }
             SubRelativeLong => {
                 let n = self.program.bytecode.read_int(2)?;
                 let m = self.tape.peek_relative(n as i32 as isize);
-                self.registers.arithmetic_overflow = self.tape.i8_subtract(m);
+                self.registers.arithmetic_overflow = self.tape.i8_subtract(m as i8);
             }
             MoveTapeShort => {
                 let n = self.program.bytecode.read_int(1)?;
@@ -492,7 +492,7 @@ impl STVM {
                     Err(e) => panic!("{:?}", e),
                     Ok(n) => {
                         if n == 1 {
-                            self.tape.write(buffer[0] as i8);
+                            self.tape.write(buffer[0]);
                         } else if n == 0 {
                             return Err(VmError::Io("no bytes read from input"));
                         } else {
@@ -523,7 +523,7 @@ impl STVM {
                 self.tape.write(n);
             }
             PushRand => {
-                let r = self.prng.gen_i8();
+                let r = self.prng.gen_u8();
                 self.stack.push(r);
                 //let r = self.prng.gen();
                 //self.stack.push((r >> 8) as i8);
@@ -554,7 +554,7 @@ impl STVM {
         self.tape.get_cursor()
     }
 
-    pub fn each_cell(&self) -> std::slice::Iter<'_, i8> {
+    pub fn each_cell(&self) -> std::slice::Iter<'_, u8> {
         self.tape.iter()
     }
 
@@ -568,7 +568,7 @@ impl STVM {
         test_vm
     }
 
-    pub fn debug_inject_byte(&mut self, b: i8) {
+    pub fn debug_inject_byte(&mut self, b: u8) {
         self.program.debug_inject_byte(b);
     }
 

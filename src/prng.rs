@@ -57,16 +57,6 @@ impl Prng {
         Prng::sm64(self.read())
     }
 
-    //pub fn gen(&mut self) -> u16 {
-    //self.data = self.next();
-    //self.data
-    //}
-
-    pub fn gen_i8(&mut self) -> i8 {
-        self.data = self.next();
-        (self.data % 0x100) as i8
-    }
-
     pub fn gen_u8(&mut self) -> u8 {
         self.data = self.next();
         (self.data & 0xff) as u8

@@ -73,6 +73,14 @@ impl Opcode {
             x => Some(x),
         }
     }
+
+    pub fn from_u8(n: u8) -> Option<Opcode> {
+        let op = Opcode::from(n);
+        match op {
+            Opcode::Illegal => None,
+            x => Some(x),
+        }
+    }
 }
 
 impl From<u8> for Opcode {

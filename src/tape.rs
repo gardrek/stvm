@@ -1,6 +1,6 @@
 use std::error::Error;
 use std::fmt;
-use std::ops::{Index, IndexMut, RangeBounds};
+use std::ops::{Index, IndexMut, /*RangeBounds*/};
 
 use super::command;
 
@@ -172,7 +172,7 @@ impl<T: Copy> Tape<T> {
         }
     }
 
-    pub fn raw_pop(&mut self) -> T {
+    pub fn _raw_pop(&mut self) -> T {
         self.data.pop().unwrap()
     }
 
@@ -204,7 +204,7 @@ impl<T: Default + Copy> Tape<T> {
 }
 
 impl Tape<u8> {
-    pub fn peek_u32(&self, mut index: usize) -> Result<u32, TapeError> {
+    pub fn _peek_u32(&self, index: usize) -> Result<u32, TapeError> {
         use std::convert::TryInto;
 
         if index >= self.data.len() {
@@ -285,80 +285,10 @@ impl Tape<u8> {
     }
 }
 
-impl Tape<i8> {
-    pub fn i8_subtract(&mut self, n: i8) -> bool {
-        let m = self.data[self.cursor] as i8;
-        let (v, overflow) = m.overflowing_add(-n);
-        self.data[self.cursor] = v;
-        overflow
-    }
-
-    pub fn read_int(&mut self, bytes: usize) -> Result<u32, TapeError> {
-        if bytes == 0 {
-            Err(TapeError::InvalidArgument)
-        } else if bytes > 4 {
-            Err(TapeError::InvalidArgument)
-        } else {
-            let mut n: u32 = 0;
-            for _i in 0..bytes {
-                let (byte, success) = self.read_inc();
-                let byte = byte as u8;
-                n = (n << 8) | (byte as u32);
-                if !success {
-                    return Err(TapeError::OutOfBounds);
-                }
-            }
-            Ok(n)
-        }
-    }
-
-    pub fn peek_int(&self, mut index: usize, bytes: usize) -> Result<u32, TapeError> {
-        if bytes == 0 {
-            Err(TapeError::InvalidArgument)
-        } else if bytes > 4 {
-            Err(TapeError::InvalidArgument)
-        } else {
-            let mut n: u32 = 0;
-            for _i in 0..bytes {
-                let byte = self.peek_at(index)? as u8;
-                index += 1;
-                n = (n << 8) | (byte as u32);
-            }
-            Ok(n)
-        }
-    }
-
-    pub fn push_int(&mut self, bytes: usize, n: u32) {
-        if bytes == 0 {
-            return;
-        } else if bytes > 4 {
-            return;
-        } else {
-            for i in 0..bytes {
-                let shift = 8 * (bytes - i - 1);
-                self.push(((n & (0xff << shift)) >> shift) as i8);
-            }
-        }
-    }
-
-    pub fn write_int_at(&mut self, index: usize, bytes: usize, n: u32) {
-        if bytes == 0 {
-            panic!();
-        } else if bytes > 4 {
-            panic!();
-        } else {
-            for i in 0..bytes {
-                let shift = 8 * (bytes - i - 1);
-                self.write_at(index + i, ((n & (0xff << shift)) >> shift) as i8);
-            }
-        }
-    }
-}
-
-impl fmt::Display for Tape<i8> {
+impl fmt::Display for Tape<u8> {
     // This trait requires `fmt` with this exact signature.
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fn format_command(bytecode: &Tape<i8>, index: usize) -> Option<(String, usize)> {
+        fn format_command(bytecode: &Tape<u8>, index: usize) -> Option<(String, usize)> {
             //use command::Opcode::*;
 
             let com =
@@ -426,26 +356,6 @@ impl fmt::Display for Tape<i8> {
 mod tests {
     #[test]
     fn u8_test() {
-        let mut i8_tape = super::Tape::new(vec![0i8]);
-        let mut u8_tape = super::Tape::new(vec![0u8]);
-
-        i8_tape.raw_pop();
-        u8_tape.raw_pop();
-
-        i8_tape.push_int(4, 256);
-        assert_eq!(i8_tape.data, vec![0, 0, 1, 0]);
-
-        u8_tape.push_int(4, 256);
-        assert_eq!(u8_tape.data, vec![0, 0, 1, 0]);
-
-        assert_eq!(256_i16.to_be_bytes(), [1, 0]);
-
-        assert_eq!(i8_tape.peek_int(0, 4).unwrap(), u8_tape.peek_u32(0).unwrap());
-
-        i8_tape.push_int(4, 0xff00ff00);
-        u8_tape.push_int(4, 0xff00ff00);
-
-        assert_eq!(i8_tape.peek_int(4, 4).unwrap(), u8_tape.peek_u32(4).unwrap());
     }
 }
 
