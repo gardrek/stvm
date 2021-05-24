@@ -10,7 +10,7 @@ fn wait_for_input() -> () {
     let mut stdin = io::stdin();
     stdin.lock();
     match stdin.read(&mut buffer) {
-        Err(e) => panic!(e),
+        Err(e) => panic!("{}", e),
         _ => (),
     }
 }

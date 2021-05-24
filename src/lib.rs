@@ -418,8 +418,8 @@ impl STVM {
 
         match com {
             Nop => (),
-            Inc => self.registers.arithmetic_overflow = self.tape.sub(-1),
-            Dec => self.registers.arithmetic_overflow = self.tape.sub(1),
+            Inc => self.registers.arithmetic_overflow = self.tape.i8_subtract(-1),
+            Dec => self.registers.arithmetic_overflow = self.tape.i8_subtract(1),
             IncTape => self.registers.tape_outside_right_bound = self.tape.move_cursor(1),
             DecTape => self.registers.tape_outside_right_bound = self.tape.move_cursor(-1),
             Set => {
@@ -428,12 +428,12 @@ impl STVM {
             }
             SubImmediate => {
                 let (n, _) = self.program.bytecode.read_inc();
-                self.registers.arithmetic_overflow = self.tape.sub(n);
+                self.registers.arithmetic_overflow = self.tape.i8_subtract(n);
             }
             SubRelativeLong => {
                 let n = self.program.bytecode.read_int(2)?;
                 let m = self.tape.peek_relative(n as i32 as isize);
-                self.registers.arithmetic_overflow = self.tape.sub(m);
+                self.registers.arithmetic_overflow = self.tape.i8_subtract(m);
             }
             MoveTapeShort => {
                 let n = self.program.bytecode.read_int(1)?;
@@ -489,7 +489,7 @@ impl STVM {
                 let mut stdin = io::stdin();
                 stdin.lock();
                 match stdin.read(&mut buffer) {
-                    Err(e) => panic!(e),
+                    Err(e) => panic!("{:?}", e),
                     Ok(n) => {
                         if n == 1 {
                             self.tape.write(buffer[0] as i8);

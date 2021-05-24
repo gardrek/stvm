@@ -66,4 +66,9 @@ impl Prng {
         self.data = self.next();
         (self.data % 0x100) as i8
     }
+
+    pub fn gen_u8(&mut self) -> u8 {
+        self.data = self.next();
+        (self.data & 0xff) as u8
+    }
 }

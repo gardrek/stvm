@@ -1,6 +1,6 @@
 use std::error::Error;
 use std::fmt;
-use std::ops::{Index, IndexMut};
+use std::ops::{Index, IndexMut, RangeBounds};
 
 use super::command;
 
@@ -38,6 +38,31 @@ pub struct Tape<T: Copy> {
     cursor: usize,
 }
 
+/*
+impl<I: RangeBounds<usize>, T: Copy> Index<I> for Tape<T> {
+    type Output = [T];
+
+    fn index(&self, bounds: I) -> &[T] {
+        use std::ops::Bound::*;
+
+        let min = match bounds.start_bound() {
+            Included(i) => i,
+            Excluded(i) => i + 1,
+            Unbounded => 0,
+        };
+
+        let max = match bounds.end_bound() {
+            Included(i) => i,
+            Excluded(i) => i - 1,
+            Unbounded => usize::MAX,
+        };
+
+        &self.data[min..=max]
+    }
+}
+// */
+
+//*
 impl<T: Copy> Index<usize> for Tape<T> {
     type Output = T;
 
@@ -51,6 +76,7 @@ impl<T: Copy> IndexMut<usize> for Tape<T> {
         &mut self.data[i]
     }
 }
+// */
 
 impl<T: Copy> Tape<T> {
     pub fn new(data: Vec<T>) -> Tape<T> {
@@ -146,6 +172,10 @@ impl<T: Copy> Tape<T> {
         }
     }
 
+    pub fn raw_pop(&mut self) -> T {
+        self.data.pop().unwrap()
+    }
+
     pub fn iter(&self) -> std::slice::Iter<'_, T> {
         self.data.iter()
     }
@@ -153,14 +183,6 @@ impl<T: Copy> Tape<T> {
 
 // TODO: change this to not require Clone when Vec.resize_with() is out of nightly
 impl<T: Default + Copy> Tape<T> {
-    pub fn grow(&mut self, new_size: usize) -> () {
-        if new_size > self.data.len() {
-            self.data.resize(new_size, T::default())
-        }
-    }
-}
-
-impl Tape<i8> {
     pub fn move_cursor(&mut self, change: isize) -> bool {
         let m = self.cursor as isize + change;
         if m < 0 {
@@ -168,15 +190,104 @@ impl Tape<i8> {
         };
         let outside_right_bound = m >= self.data.len() as isize;
         if outside_right_bound {
-            //self.data.resize((m + 1) as usize, 0i8);
             self.grow((m + 1) as usize);
         };
         self.cursor = m as usize;
         outside_right_bound
     }
 
-    pub fn sub(&mut self, n: i8) -> bool {
-        let m = self.data[self.cursor];
+    pub fn grow(&mut self, new_size: usize) -> () {
+        if new_size > self.data.len() {
+            self.data.resize(new_size, T::default())
+        }
+    }
+}
+
+impl Tape<u8> {
+    pub fn peek_u32(&self, mut index: usize) -> Result<u32, TapeError> {
+        use std::convert::TryInto;
+
+        if index >= self.data.len() {
+            //~ self.grow(index + 1);
+            return Err(TapeError::OutOfBounds);
+        }
+
+        let bytes = &self.data[index..(index+4)];
+        Ok(u32::from_be_bytes(bytes.try_into().unwrap()))
+    }
+
+    pub fn i8_subtract(&mut self, n: i8) -> bool {
+        let m = self.data[self.cursor] as i8;
+        let (v, overflow) = m.overflowing_add(-n);
+        self.data[self.cursor] = v as u8;
+        overflow
+    }
+
+    pub fn read_int(&mut self, bytes: usize) -> Result<u32, TapeError> {
+        if bytes == 0 {
+            Err(TapeError::InvalidArgument)
+        } else if bytes > 4 {
+            Err(TapeError::InvalidArgument)
+        } else {
+            let mut n: u32 = 0;
+            for _i in 0..bytes {
+                let (byte, success) = self.read_inc();
+                let byte = byte as u8;
+                n = (n << 8) | (byte as u32);
+                if !success {
+                    return Err(TapeError::OutOfBounds);
+                }
+            }
+            Ok(n)
+        }
+    }
+
+    pub fn peek_int(&self, mut index: usize, bytes: usize) -> Result<u32, TapeError> {
+        if bytes == 0 {
+            Err(TapeError::InvalidArgument)
+        } else if bytes > 4 {
+            Err(TapeError::InvalidArgument)
+        } else {
+            let mut n: u32 = 0;
+            for _i in 0..bytes {
+                let byte = self.peek_at(index)? as u8;
+                index += 1;
+                n = (n << 8) | (byte as u32);
+            }
+            Ok(n)
+        }
+    }
+
+    pub fn push_int(&mut self, bytes: usize, n: u32) {
+        if bytes == 0 {
+            return;
+        } else if bytes > 4 {
+            return;
+        } else {
+            for i in 0..bytes {
+                let shift = 8 * (bytes - i - 1);
+                self.push(((n & (0xff << shift)) >> shift) as u8);
+            }
+        }
+    }
+
+    pub fn write_int_at(&mut self, index: usize, bytes: usize, n: u32) {
+        if bytes == 0 {
+            panic!();
+        } else if bytes > 4 {
+            panic!();
+        } else {
+            for i in 0..bytes {
+                let shift = 8 * (bytes - i - 1);
+                self.write_at(index + i, ((n & (0xff << shift)) >> shift) as u8);
+            }
+        }
+    }
+}
+
+impl Tape<i8> {
+    pub fn i8_subtract(&mut self, n: i8) -> bool {
+        let m = self.data[self.cursor] as i8;
         let (v, overflow) = m.overflowing_add(-n);
         self.data[self.cursor] = v;
         overflow
@@ -308,3 +419,33 @@ impl fmt::Display for Tape<i8> {
         write!(f, "{}", full_output)
     }
 }
+
+
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn u8_test() {
+        let mut i8_tape = super::Tape::new(vec![0i8]);
+        let mut u8_tape = super::Tape::new(vec![0u8]);
+
+        i8_tape.raw_pop();
+        u8_tape.raw_pop();
+
+        i8_tape.push_int(4, 256);
+        assert_eq!(i8_tape.data, vec![0, 0, 1, 0]);
+
+        u8_tape.push_int(4, 256);
+        assert_eq!(u8_tape.data, vec![0, 0, 1, 0]);
+
+        assert_eq!(256_i16.to_be_bytes(), [1, 0]);
+
+        assert_eq!(i8_tape.peek_int(0, 4).unwrap(), u8_tape.peek_u32(0).unwrap());
+
+        i8_tape.push_int(4, 0xff00ff00);
+        u8_tape.push_int(4, 0xff00ff00);
+
+        assert_eq!(i8_tape.peek_int(4, 4).unwrap(), u8_tape.peek_u32(4).unwrap());
+    }
+}
+
